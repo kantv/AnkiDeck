@@ -8,7 +8,7 @@ namespace AnkiDeck.Services;
 /// <summary>Detects HTML markup in Anki fields and converts such fields to plain text.</summary>
 public static class HtmlMarkup
 {
-    /// <summary>Matches line-break tags, which do not count as HTML markup on their own.</summary>
+    /// <summary>Matches line-break tags, which are handled separately from other markup.</summary>
     private static readonly Regex LineBreakTagPattern = new(
         @"<\s*/?\s*br\s*/?\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -23,9 +23,10 @@ public static class HtmlMarkup
         RegexOptions.Compiled);
 
     /// <summary>
-    /// Checks the Front, Back and Audio fields for HTML markup: tags (a plain <c>&lt;br&gt;</c>
-    /// is ignored) or character entities such as <c>&amp;nbsp;</c>. Note types without those
-    /// field names fall back to their first two fields.
+    /// Checks the Front, Back and Audio fields for HTML markup. A line break is only ignored
+    /// when it actually separates visible text; a trailing, leading or lone <c>&lt;br&gt;</c>
+    /// counts as markup because it has no meaning. Note types without those field names fall
+    /// back to their first two fields.
     /// </summary>
     public static bool IsPresent(IReadOnlyList<AnkiField> fields)
     {
@@ -47,7 +48,10 @@ public static class HtmlMarkup
         || string.Equals(name, "Back", StringComparison.OrdinalIgnoreCase)
         || string.Equals(name, "Audio", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Returns true when the value contains an HTML tag (except a plain line break) or an HTML entity.</summary>
+    /// <summary>
+    /// Returns true when the value contains a tag (including a meaningless line break) or an
+    /// HTML entity. A <c>&lt;br&gt;</c> that separates visible text is not considered markup.
+    /// </summary>
     public static bool Contains(string value)
     {
         if (string.IsNullOrEmpty(value))
@@ -55,13 +59,35 @@ public static class HtmlMarkup
             return false;
         }
 
+        if (HtmlEntityPattern.IsMatch(value))
+        {
+            return true;
+        }
+
+        // Any tag other than a line break is markup.
         var withoutLineBreaks = LineBreakTagPattern.Replace(value, string.Empty);
-        return HtmlTagPattern.IsMatch(withoutLineBreaks) || HtmlEntityPattern.IsMatch(value);
+        if (HtmlTagPattern.IsMatch(withoutLineBreaks))
+        {
+            return true;
+        }
+
+        var tokens = Tokenize(value);
+        var meaningful = FindMeaningfulLineBreaks(tokens);
+
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            if (tokens[index].Kind == MarkupTokenKind.LineBreak && !meaningful[index])
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
-    /// Removes HTML tags and decodes character entities, keeping line breaks as literal
-    /// <c>&lt;br&gt;</c> text so the result can be compared with the original field.
+    /// Removes HTML tags and decodes character entities. Meaningful line breaks are kept as
+    /// literal <c>&lt;br&gt;</c> text; line breaks that separate nothing are dropped.
     /// </summary>
     public static string Strip(string html)
     {
@@ -70,15 +96,51 @@ public static class HtmlMarkup
             return string.Empty;
         }
 
+        var tokens = Tokenize(html);
+        var meaningful = FindMeaningfulLineBreaks(tokens);
         var result = new StringBuilder(html.Length);
-        var index = 0;
 
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (token.Kind == MarkupTokenKind.Text)
+            {
+                result.Append(token.Value);
+            }
+            else if (meaningful[index])
+            {
+                result.Append("<br>");
+            }
+        }
+
+        return WebUtility.HtmlDecode(result.ToString()).Replace('\u00a0', ' ');
+    }
+
+    /// <summary>
+    /// Splits the field into text chunks and line-break tokens. All other tags are dropped;
+    /// the text inside them is kept, while script and style bodies are removed entirely.
+    /// </summary>
+    private static List<MarkupToken> Tokenize(string html)
+    {
+        var tokens = new List<MarkupToken>();
+        var text = new StringBuilder();
+
+        void FlushText()
+        {
+            if (text.Length > 0)
+            {
+                tokens.Add(new MarkupToken(MarkupTokenKind.Text, text.ToString()));
+                text.Clear();
+            }
+        }
+
+        var index = 0;
         while (index < html.Length)
         {
             var current = html[index];
             if (current != '<')
             {
-                result.Append(current);
+                text.Append(current);
                 index++;
                 continue;
             }
@@ -94,7 +156,7 @@ public static class HtmlMarkup
             // A '<' that does not start a tag (for example "5 < 10") stays as plain text.
             if (index + 1 >= html.Length || !IsTagStart(html[index + 1]))
             {
-                result.Append(current);
+                text.Append(current);
                 index++;
                 continue;
             }
@@ -102,7 +164,7 @@ public static class HtmlMarkup
             var tagEnd = FindTagEnd(html, index);
             if (tagEnd < 0)
             {
-                result.Append(current);
+                text.Append(current);
                 index++;
                 continue;
             }
@@ -113,7 +175,8 @@ public static class HtmlMarkup
             var tagName = ReadTagName(tag);
             if (tagName.Equals("br", StringComparison.OrdinalIgnoreCase))
             {
-                result.Append("<br>");
+                FlushText();
+                tokens.Add(new MarkupToken(MarkupTokenKind.LineBreak, string.Empty));
                 continue;
             }
 
@@ -134,8 +197,51 @@ public static class HtmlMarkup
             }
         }
 
-        return WebUtility.HtmlDecode(result.ToString()).Replace('\u00a0', ' ');
+        FlushText();
+        return tokens;
     }
+
+    /// <summary>
+    /// A line break is meaningful only when there is visible text both before and after it.
+    /// </summary>
+    private static bool[] FindMeaningfulLineBreaks(IReadOnlyList<MarkupToken> tokens)
+    {
+        var visible = new bool[tokens.Count];
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            visible[index] = tokens[index].Kind == MarkupTokenKind.Text
+                             && HasVisibleText(tokens[index].Value);
+        }
+
+        var hasVisibleBefore = new bool[tokens.Count];
+        var seen = false;
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            hasVisibleBefore[index] = seen;
+            seen |= visible[index];
+        }
+
+        var hasVisibleAfter = new bool[tokens.Count];
+        seen = false;
+        for (var index = tokens.Count - 1; index >= 0; index--)
+        {
+            hasVisibleAfter[index] = seen;
+            seen |= visible[index];
+        }
+
+        var meaningful = new bool[tokens.Count];
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            meaningful[index] = tokens[index].Kind == MarkupTokenKind.LineBreak
+                                && hasVisibleBefore[index]
+                                && hasVisibleAfter[index];
+        }
+
+        return meaningful;
+    }
+
+    private static bool HasVisibleText(string text) =>
+        WebUtility.HtmlDecode(text).Any(character => !char.IsWhiteSpace(character));
 
     private static bool IsTagStart(char value) =>
         char.IsLetter(value) || value is '/' or '!' or '?';
@@ -187,4 +293,12 @@ public static class HtmlMarkup
 
         return index > start ? tag[start..index] : string.Empty;
     }
+
+    private enum MarkupTokenKind
+    {
+        Text,
+        LineBreak,
+    }
+
+    private readonly record struct MarkupToken(MarkupTokenKind Kind, string Value);
 }
