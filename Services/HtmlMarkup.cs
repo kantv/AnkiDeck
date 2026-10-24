@@ -23,15 +23,14 @@ public static class HtmlMarkup
         RegexOptions.Compiled);
 
     /// <summary>
-    /// Checks the Front and Back fields for HTML markup: tags (a plain <c>&lt;br&gt;</c> is ignored)
-    /// or character entities such as <c>&amp;nbsp;</c>. Note types without those field names fall
-    /// back to their first two fields.
+    /// Checks the Front, Back and Audio fields for HTML markup: tags (a plain <c>&lt;br&gt;</c>
+    /// is ignored) or character entities such as <c>&amp;nbsp;</c>. Note types without those
+    /// field names fall back to their first two fields.
     /// </summary>
     public static bool IsPresent(IReadOnlyList<AnkiField> fields)
     {
         var candidates = fields
-            .Where(field => string.Equals(field.Name, "Front", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(field.Name, "Back", StringComparison.OrdinalIgnoreCase))
+            .Where(field => IsMarkupField(field.Name))
             .ToList();
 
         if (candidates.Count == 0)
@@ -41,6 +40,12 @@ public static class HtmlMarkup
 
         return candidates.Any(field => Contains(field.Value));
     }
+
+    /// <summary>Fields that are checked for markup and cleaned when a note is processed.</summary>
+    public static bool IsMarkupField(string name) =>
+        string.Equals(name, "Front", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "Back", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "Audio", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Returns true when the value contains an HTML tag (except a plain line break) or an HTML entity.</summary>
     public static bool Contains(string value)

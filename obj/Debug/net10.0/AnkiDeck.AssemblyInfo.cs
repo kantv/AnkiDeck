@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("AnkiDeck")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+37d5d66770c7c3ac2c70bee865f26c3b69a317d1")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7d1279130606f4dfc01eac3727b21362dad64979")]
 [assembly: System.Reflection.AssemblyProductAttribute("AnkiDeck")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AnkiDeck")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -18,9 +18,6 @@ public sealed class DeckWorkspace : IDisposable
     private const char FieldSeparator = '\u001f';
     private const string ZstdCollectionEntry = "collection.anki21b";
 
-    /// <summary>Fields shown in the table and rewritten when a note is confirmed.</summary>
-    private static readonly string[] DisplayFieldNames = ["Front", "Back", "Audio"];
-
     private static readonly Regex MediaReferencePattern = new(
         @"\[(?:sound|img):[^\]]+\]",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -203,8 +200,7 @@ public sealed class DeckWorkspace : IDisposable
     private static string Clean(AnkiNote note, string fieldName) =>
         HtmlMarkup.Strip(note.GetField(fieldName));
 
-    private static bool IsDisplayField(string name) =>
-        DisplayFieldNames.Contains(name, StringComparer.OrdinalIgnoreCase);
+    private static bool IsDisplayField(string name) => HtmlMarkup.IsMarkupField(name);
 
     private static List<AnkiField> CleanFields(AnkiNote note) =>
         note.Fields
