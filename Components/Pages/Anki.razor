@@ -2,6 +2,8 @@
 @using AnkiDeck.Models
 @using AnkiDeck.Services
 @inject ApkgReader Reader
+@inject DeckWorkspaceStore Store
+@inject IHttpContextAccessor HttpContextAccessor
 
 <PageTitle>Anki</PageTitle>
 
@@ -21,7 +23,17 @@
         <input class="form-control" id="deck-file" name="Upload" type="file" accept=".apkg" required />
         <div class="form-text">Поддерживаются файлы до 512 МБ, в том числе новый сжатый формат Anki.</div>
     </div>
-    <button class="btn btn-primary" type="submit">Загрузить и прочитать</button>
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-primary" type="submit">Загрузить и прочитать</button>
+        @if (workspace is not null)
+        {
+            <a class="btn btn-success" href="/anki/export">Сохранить колоду</a>
+        }
+        else
+        {
+            <button class="btn btn-success" type="button" disabled>Сохранить колоду</button>
+        }
+    </div>
 </form>
 
 @if (error is not null)
@@ -29,96 +41,137 @@
     <div class="alert alert-danger" role="alert">@error</div>
 }
 
-@if (result is not null)
+@if (workspace is not null)
 {
     <div class="alert alert-success" role="status">
         <div>
-            Файл <strong>@result.FileName</strong> прочитан за
-            @result.Elapsed.TotalSeconds.ToString("0.0") с.
+            Файл <strong>@workspace.FileName</strong> прочитан за
+            @workspace.LoadTime.TotalSeconds.ToString("0.0") с.
         </div>
         <div>
-            Найдено заметок: <strong>@result.NoteCount</strong>,
-            карточек: <strong>@result.CardCount</strong>.
+            Найдено заметок: <strong>@workspace.NoteCount</strong>,
+            карточек: <strong>@workspace.CardCount</strong>.
         </div>
         <div>
             Заметок с HTML-разметкой:
-            <strong>@result.NotesWithHtmlCount</strong>.
+            <strong>@workspace.NotesWithHtmlCount</strong>.
+            <form method="post" @formname="deck-bulk" class="d-inline-block ms-2">
+                <AntiforgeryToken />
+                <button class="btn btn-sm btn-warning" type="submit" name="BulkAction" value="process-all"
+                        disabled="@(workspace.NotesWithHtmlCount == 0)">
+                    Обработать ВСЕ
+                </button>
+            </form>
         </div>
         <div class="small text-muted">
-            Источник данных: @result.CollectionEntry
+            Источник данных: @workspace.CollectionEntry
         </div>
     </div>
 
-    @foreach (var warning in result.Warnings)
+    @foreach (var warning in workspace.Warnings)
     {
         <div class="alert alert-warning" role="alert">@warning</div>
     }
 
-    @if (result.Notes.Count > 0)
+    @if (workspace.Notes.Count > 0)
     {
         <h2 class="h4 mt-4">Список заметок</h2>
 
-        <div class="table-responsive">
-            <table class="table table-sm table-striped align-middle deck-table">
-                <thead>
-                    <tr>
-                        <th scope="col" class="text-muted">#</th>
-                        <th scope="col">Front</th>
-                        <th scope="col">Back</th>
-                        <th scope="col">Audio</th>
-                        <th scope="col" class="text-center">HTML</th>
-                        <th scope="col">Теги</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @for (var index = 0; index < VisibleNotes.Count; index++)
-                    {
-                        var note = VisibleNotes[index];
-                        <tr>
-                            <td class="text-muted">@(index + 1)</td>
-                            <td class="note-field">@note.GetField("Front")</td>
-                            <td class="note-field">@note.GetField("Back")</td>
-                            <td class="note-field">@note.GetField("Audio")</td>
-                            <td class="text-center">
-                                @if (note.HasHtmlMarkup)
-                                {
-                                    <span class="html-mark" role="img" title="Содержит HTML-разметку" aria-label="Содержит HTML-разметку">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
-                                             fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                                            <path d="M5.854 4.646a.5.5 0 0 1 0 .708L3.207 8l2.647 2.646a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 0 1 .708 0zm4.292 0a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-3 3a.5.5 0 0 1-.708-.708L12.793 8l-2.647-2.646a.5.5 0 0 1 0-.708z"/>
-                                        </svg>
-                                    </span>
-                                }
-                                else
-                                {
-                                    <span class="text-muted">—</span>
-                                }
-                            </td>
-                            <td>
-                                @if (note.Tags.Count == 0)
-                                {
-                                    <span class="text-muted">—</span>
-                                }
-                                else
-                                {
-                                    @foreach (var tag in note.Tags)
-                                    {
-                                        <span class="badge text-bg-secondary me-1">@tag</span>
-                                    }
-                                }
-                            </td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
+        <form method="post" @formname="deck-actions" id="deck-actions-form">
+            <AntiforgeryToken />
 
-        @if (result.Notes.Count > DisplayLimit)
-        {
-            <p class="text-muted">
-                Показаны первые @DisplayLimit из @result.Notes.Count заметок.
-            </p>
-        }
+            <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle deck-table">
+                    <thead>
+                        <tr>
+                            <th scope="col" class="text-muted">#</th>
+                            <th scope="col">Front</th>
+                            <th scope="col">Back</th>
+                            <th scope="col">Audio</th>
+                            <th scope="col" class="text-center">
+                                <label class="html-filter" title="Показывать только заметки с HTML-разметкой">
+                                    <input class="form-check-input" type="checkbox" name="HtmlOnly" value="true"
+                                           checked="@workspace.ShowHtmlOnly"
+                                           onchange="this.form.requestSubmit()" />
+                                    <span>HTML</span>
+                                </label>
+                            </th>
+                            <th scope="col" class="text-center">Действие</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @for (var index = 0; index < VisibleNotes.Count; index++)
+                        {
+                            var note = VisibleNotes[index];
+                            <tr>
+                                <td class="text-muted">@(index + 1)</td>
+                                <td class="note-field">@note.GetField("Front")</td>
+                                <td class="note-field">@note.GetField("Back")</td>
+                                <td class="note-field">@note.GetField("Audio")</td>
+                                <td class="text-center">
+                                    @if (note.HasHtmlMarkup)
+                                    {
+                                        <span class="html-mark" role="img" title="Содержит HTML-разметку или спецсимволы" aria-label="Содержит HTML-разметку или спецсимволы">
+                                            <svg class="html-mark-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+                                                 fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                                <path d="M5.854 4.646a.5.5 0 0 1 0 .708L3.207 8l2.647 2.646a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 0 1 .708 0zm4.292 0a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-3 3a.5.5 0 0 1-.708-.708L12.793 8l-2.647-2.646a.5.5 0 0 1 0-.708z"/>
+                                            </svg>
+                                            <span class="html-mark-text">HTML</span>
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                </td>
+                                <td class="text-center">
+                                    @if (note.HasHtmlMarkup)
+                                    {
+                                        <button class="btn btn-sm btn-outline-warning" type="submit" name="Action" value="process:@note.NoteId">
+                                            Обработать
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                </td>
+                            </tr>
+
+                            @if (workspace.ExpandedNoteId == note.NoteId)
+                            {
+                                var preview = workspace.GetPreview(note);
+                                <tr class="preview-row">
+                                    <td class="text-muted" aria-label="Обработанная заметка">↳</td>
+                                    <td class="note-field">@preview.Front</td>
+                                    <td class="note-field">@preview.Back</td>
+                                    <td class="note-field">@preview.Audio</td>
+                                    <td class="text-center">
+                                        <span class="preview-hint">Без разметки</span>
+                                    </td>
+                                    <td class="text-center">
+                                        <button class="btn btn-sm btn-success" type="submit" name="Action" value="confirm:@note.NoteId">
+                                            Подтвердить
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (FilteredNotes.Count == 0)
+            {
+                <p class="text-muted mb-0">Нет заметок с HTML-разметкой.</p>
+            }
+            else if (FilteredNotes.Count > DisplayLimit)
+            {
+                <p class="text-muted">
+                    Показаны первые @DisplayLimit из @FilteredNotes.Count заметок.
+                </p>
+            }
+        </form>
     }
 }
 
@@ -127,19 +180,85 @@
 @code {
     private const int DisplayLimit = 500;
 
-    private AnkiDeckInspection? result;
+    private DeckWorkspace? workspace;
     private string? error;
 
     [SupplyParameterFromForm(FormName = "anki-upload")]
     public IFormFile? Upload { get; set; }
 
+    [SupplyParameterFromForm(FormName = "deck-actions")]
+    public string? Action { get; set; }
+
+    /// <summary>Submitted by the checkbox in the HTML column header.</summary>
+    [SupplyParameterFromForm(FormName = "deck-actions")]
+    public bool HtmlOnly { get; set; }
+
+    /// <summary>Submitted by the "process everything" button in the statistics block.</summary>
+    [SupplyParameterFromForm(FormName = "deck-bulk")]
+    public string? BulkAction { get; set; }
+
+    private IReadOnlyList<AnkiNote> FilteredNotes =>
+        workspace is null
+            ? []
+            : workspace.ShowHtmlOnly
+                ? workspace.Notes.Where(note => note.HasHtmlMarkup).ToList()
+                : workspace.Notes.ToList();
+
     private IReadOnlyList<AnkiNote> VisibleNotes =>
-        result is null ? [] : result.Notes.Take(DisplayLimit).ToList();
+        FilteredNotes.Take(DisplayLimit).ToList();
 
     protected override async Task OnInitializedAsync()
     {
-        if (Upload is null)
+        var context = HttpContextAccessor.HttpContext;
+        var session = context?.Session;
+        var storedId = session?.GetString(DeckWorkspaceStore.SessionKey);
+
+        if (Upload is not null)
         {
+            await HandleUploadAsync(session);
+            return;
+        }
+
+        // The table has its own form (row actions and the HTML filter), so any POST here
+        // means the deck is already on the server and only the view state changes.
+        if (context is not null && HttpMethods.IsPost(context.Request.Method))
+        {
+            if (Store.TryGet(storedId, out var stored))
+            {
+                workspace = stored;
+                stored.ShowHtmlOnly = HtmlOnly;
+
+                if (!string.IsNullOrEmpty(BulkAction))
+                {
+                    if (string.Equals(BulkAction, "process-all", StringComparison.Ordinal))
+                    {
+                        await stored.CleanAllAsync();
+                    }
+                }
+                else if (!string.IsNullOrEmpty(Action))
+                {
+                    await HandleActionAsync(stored, Action);
+                }
+            }
+            else
+            {
+                error = "Колода не найдена на сервере. Загрузите файл заново.";
+            }
+
+            return;
+        }
+
+        if (Store.TryGet(storedId, out var existing))
+        {
+            workspace = existing;
+        }
+    }
+
+    private async Task HandleUploadAsync(ISession? session)
+    {
+        if (Upload is null || session is null)
+        {
+            error = "Не удалось получить файл.";
             return;
         }
 
@@ -158,7 +277,13 @@
         try
         {
             await using var stream = Upload.OpenReadStream();
-            result = await Reader.ReadAsync(stream, Upload.FileName);
+            var created = await DeckWorkspace.CreateAsync(stream, Upload.FileName, Reader);
+
+            Store.Remove(session.GetString(DeckWorkspaceStore.SessionKey));
+            Store.Add(created);
+            session.SetString(DeckWorkspaceStore.SessionKey, created.Id);
+
+            workspace = created;
         }
         catch (InvalidDataException exception)
         {
@@ -167,6 +292,32 @@
         catch (Exception exception)
         {
             error = $"Не удалось прочитать колоду: {exception.Message}";
+        }
+    }
+
+    private async Task HandleActionAsync(DeckWorkspace current, string action)
+    {
+        var separator = action.IndexOf(':');
+        if (separator <= 0 || !long.TryParse(action[(separator + 1)..], out var noteId))
+        {
+            return;
+        }
+
+        var note = current.Notes.FirstOrDefault(item => item.NoteId == noteId);
+        if (note is null)
+        {
+            return;
+        }
+
+        switch (action[..separator])
+        {
+            case "process":
+                current.ExpandedNoteId = noteId;
+                break;
+
+            case "confirm":
+                await current.ConfirmPreviewAsync(note);
+                break;
         }
     }
 }

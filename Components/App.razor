@@ -13,6 +13,60 @@
 
 <body>
     <Routes />
+
+    @* The page is re-rendered by a full POST, so remember the scroll position of the notes
+       table and restore it (or bring the new comparison row into view) after the reload. *@
+    <script>
+        (function () {
+            var scrollKey = 'ankideck.scrollY';
+            var previewKey = 'ankideck.focusPreview';
+            var savedScroll = null;
+            var focusPreview = false;
+
+            try {
+                savedScroll = sessionStorage.getItem(scrollKey);
+                focusPreview = sessionStorage.getItem(previewKey) === '1';
+                sessionStorage.removeItem(scrollKey);
+                sessionStorage.removeItem(previewKey);
+            } catch (error) {
+                // sessionStorage may be unavailable in private modes; the page then simply starts at the top.
+            }
+
+            document.addEventListener('submit', function (event) {
+                if (!event.target || event.target.id !== 'deck-actions-form') {
+                    return;
+                }
+
+                try {
+                    sessionStorage.setItem(scrollKey, String(window.scrollY));
+                    var submitter = event.submitter;
+                    if (submitter && typeof submitter.value === 'string' && submitter.value.indexOf('process:') === 0) {
+                        sessionStorage.setItem(previewKey, '1');
+                    }
+                } catch (error) {
+                }
+            }, true);
+
+            window.addEventListener('load', function () {
+                window.requestAnimationFrame(function () {
+                    if (focusPreview) {
+                        var preview = document.querySelector('tr.preview-row');
+                        if (preview) {
+                            preview.scrollIntoView({ block: 'center' });
+                            return;
+                        }
+                    }
+
+                    if (savedScroll !== null) {
+                        var position = parseInt(savedScroll, 10);
+                        if (!isNaN(position)) {
+                            window.scrollTo(0, position);
+                        }
+                    }
+                });
+            });
+        })();
+    </script>
 </body>
 
 </html>

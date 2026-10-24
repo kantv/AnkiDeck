@@ -64,5 +64,5 @@ C:\gitProjects\AnkiDeck\obj\Debug\net10.0\AnkiDeck.genruntimeconfig.cache
 C:\gitProjects\AnkiDeck\obj\Debug\net10.0\ref\AnkiDeck.dll
 C:\gitProjects\AnkiDeck\obj\Debug\net10.0\scopedcss\Components\Pages\Anki.razor.rz.scp.css
 C:\gitProjects\AnkiDeck\obj\Debug\net10.0\AnkiDeck.sourcelink.json
-C:\gitProjects\AnkiDeck\obj\Debug\net10.0\compressed\j7ymxts6ls-{0}-20hfytbynk-20hfytbynk.gz
-C:\gitProjects\AnkiDeck\obj\Debug\net10.0\compressed\4zm91c1ntg-{0}-20hfytbynk-20hfytbynk.gz
+C:\gitProjects\AnkiDeck\obj\Debug\net10.0\compressed\j7ymxts6ls-{0}-olnjts29h7-olnjts29h7.gz
+C:\gitProjects\AnkiDeck\obj\Debug\net10.0\compressed\4zm91c1ntg-{0}-olnjts29h7-olnjts29h7.gz

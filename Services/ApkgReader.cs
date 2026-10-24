@@ -1,12 +1,19 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using AnkiDeck.Models;
 using Microsoft.Data.Sqlite;
 using ZstdSharp;
 
 namespace AnkiDeck.Services;
+
+/// <summary>Notes and metadata read from an .apkg package.</summary>
+public sealed record ParsedDeck(
+    string CollectionEntry,
+    int CardCount,
+    IReadOnlyList<AnkiNote> Notes,
+    IReadOnlyList<string> Warnings,
+    TimeSpan Elapsed);
 
 /// <summary>
 /// Reads an Anki deck package (.apkg) and extracts the notes it contains.
@@ -33,43 +40,16 @@ public sealed class ApkgReader
         "collection.anki2",
     ];
 
-    /// <summary>Matches line-break tags, which do not count as HTML markup on their own.</summary>
-    private static readonly Regex LineBreakTagPattern = new(
-        @"<\s*/?\s*br\s*/?\s*>",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static readonly Regex HtmlTagPattern = new(
-        @"<\s*/?\s*[a-z][^>]*>",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    /// <summary>Reads a package from the supplied stream. The stream is copied to a temporary file first.</summary>
-    public async Task<AnkiDeckInspection> ReadAsync(
-        Stream package,
-        string fileName,
+    /// <summary>Extracts the collection database into <paramref name="workDirectory"/> and reads its notes.</summary>
+    public async Task<ParsedDeck> ParseAsync(
+        string packagePath,
+        string workDirectory,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(package);
-
         var started = Stopwatch.StartNew();
-        var workDirectory = Directory.CreateTempSubdirectory("ankideck-");
+        var (databasePath, collectionEntry) = await ExtractCollectionAsync(packagePath, workDirectory, cancellationToken);
 
-        try
-        {
-            var packagePath = Path.Combine(workDirectory.FullName, "deck.apkg");
-            await using (var file = new FileStream(
-                packagePath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                bufferSize: 81920, useAsync: true))
-            {
-                await package.CopyToAsync(file, cancellationToken);
-            }
-
-            var (databasePath, collectionEntry) = await ExtractCollectionAsync(packagePath, workDirectory.FullName, cancellationToken);
-            return await ReadCollectionAsync(databasePath, collectionEntry, Path.GetFileName(fileName), started, cancellationToken);
-        }
-        finally
-        {
-            TryDeleteDirectory(workDirectory.FullName);
-        }
+        return await ReadCollectionAsync(databasePath, collectionEntry, started, cancellationToken);
     }
 
     /// <summary>Extracts the newest collection database found in the archive (decompressing it when needed).</summary>
@@ -138,10 +118,9 @@ public sealed class ApkgReader
             "В архиве .apkg не найден файл коллекции (collection.anki2, collection.anki21 или collection.anki21b).");
     }
 
-    private static async Task<AnkiDeckInspection> ReadCollectionAsync(
+    private static async Task<ParsedDeck> ReadCollectionAsync(
         string databasePath,
         string collectionEntry,
-        string fileName,
         Stopwatch started,
         CancellationToken cancellationToken)
     {
@@ -176,7 +155,7 @@ public sealed class ApkgReader
         var notes = new List<AnkiNote>();
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = "SELECT id, mid, flds, tags FROM notes ORDER BY id";
+            command.CommandText = "SELECT id, mid, flds FROM notes ORDER BY id";
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
@@ -184,15 +163,10 @@ public sealed class ApkgReader
                 var noteId = reader.GetInt64(0);
                 var noteTypeId = reader.GetInt64(1);
                 var rawFields = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
-                var rawTags = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
 
                 var fields = SplitFields(rawFields, fieldNames.GetValueOrDefault(noteTypeId));
 
-                notes.Add(new AnkiNote(
-                    noteId,
-                    fields,
-                    SplitTags(rawTags),
-                    ContainsHtmlMarkup(fields)));
+                notes.Add(new AnkiNote(noteId, fields, HtmlMarkup.IsPresent(fields)));
             }
         }
 
@@ -202,17 +176,7 @@ public sealed class ApkgReader
             warnings.Add("В файле не найдено ни одной заметки.");
         }
 
-        return new AnkiDeckInspection
-        {
-            FileName = fileName,
-            CollectionEntry = collectionEntry,
-            NoteCount = notes.Count,
-            CardCount = cardCount,
-            NotesWithHtmlCount = notes.Count(note => note.HasHtmlMarkup),
-            Notes = notes,
-            Warnings = warnings,
-            Elapsed = started.Elapsed,
-        };
+        return new ParsedDeck(collectionEntry, cardCount, notes, warnings, started.Elapsed);
     }
 
     private static List<AnkiField> SplitFields(string rawFields, IReadOnlyList<string>? names)
@@ -230,39 +194,6 @@ public sealed class ApkgReader
         }
 
         return fields;
-    }
-
-    private static List<string> SplitTags(string rawTags) =>
-        rawTags.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-
-    /// <summary>
-    /// Checks the Front and Back fields for HTML tags; a plain <c>&lt;br&gt;</c> is ignored.
-    /// Note types without those field names fall back to their first two fields.
-    /// </summary>
-    private static bool ContainsHtmlMarkup(IReadOnlyList<AnkiField> fields)
-    {
-        var candidates = fields
-            .Where(field => string.Equals(field.Name, "Front", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(field.Name, "Back", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (candidates.Count == 0)
-        {
-            candidates = fields.Take(2).ToList();
-        }
-
-        return candidates.Any(field => ContainsHtmlTags(field.Value));
-    }
-
-    private static bool ContainsHtmlTags(string value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return false;
-        }
-
-        var withoutLineBreaks = LineBreakTagPattern.Replace(value, string.Empty);
-        return HtmlTagPattern.IsMatch(withoutLineBreaks);
     }
 
     private static async Task<long> CountAsync(SqliteConnection connection, string table, CancellationToken cancellationToken)
@@ -385,20 +316,5 @@ public sealed class ApkgReader
         }
 
         return fields;
-    }
-
-    private static void TryDeleteDirectory(string directory)
-    {
-        try
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-        catch (IOException)
-        {
-            // A lingering file handle must not hide the parsing result.
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
     }
 }
