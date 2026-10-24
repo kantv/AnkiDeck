@@ -1,0 +1,298 @@
+@page "/settings"
+@using AnkiDeck.Models
+@using AnkiDeck.Services
+@inject IHttpContextAccessor HttpContextAccessor
+@inject ZvukogramClient Zvukogram
+
+<PageTitle>Настройки</PageTitle>
+
+<div class="container-xxl py-4">
+
+<h1>Настройки Звукограм</h1>
+
+<p><a href="/anki">← К списку заметок</a></p>
+
+<p class="text-muted">
+    Параметры нужны для генерации аудио через API Звукограм. Они сохраняются в cookie этого браузера
+    и не передаются никуда, кроме самого сервиса.
+</p>
+
+@if (saved)
+{
+    <div class="alert alert-success" role="status">Настройки сохранены.</div>
+}
+
+@if (error is not null)
+{
+    <div class="alert alert-danger" role="alert">@error</div>
+}
+
+<form method="post" @formname="zvukogram-settings">
+    <AntiforgeryToken />
+
+    <div class="row">
+        <div class="col-lg-6 mb-3">
+            <label class="form-label" for="settings-email">E-mail аккаунта</label>
+            <input class="form-control" id="settings-email" name="Email" type="email"
+                   value="@Email" autocomplete="email" required />
+        </div>
+
+        <div class="col-lg-6 mb-3">
+            <label class="form-label" for="settings-token">API-токен</label>
+            <input class="form-control" id="settings-token" name="Token" type="password"
+                   value="@Token" autocomplete="off" required />
+            <div class="form-text">Токен берётся в личном кабинете Звукограма.</div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-6 mb-3">
+            <label class="form-label" for="settings-voice">Имя голоса</label>
+            <input class="form-control" id="settings-voice" name="Voice" type="text"
+                   value="@Voice" required />
+            <div class="form-text">
+                Имя голоса из
+                <a href="https://zvukogram.com/index.php?r=api/voices" target="_blank" rel="noopener">списка голосов</a>,
+                например <code>Matthew plus</code> или <code>Мартын</code>.
+            </div>
+        </div>
+
+        <div class="col-lg-6 mb-3">
+            <label class="form-label" for="settings-format">Формат</label>
+            <select class="form-select" id="settings-format" name="Format">
+                @foreach (var format in Formats)
+                {
+                    <option value="@format" selected="@(string.Equals(Format, format, StringComparison.OrdinalIgnoreCase))">@format</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-6 mb-3">
+            <label class="form-label" for="settings-sample-rate">Частота дискретизации</label>
+            <select class="form-select" id="settings-sample-rate" name="SampleRate">
+                <option value="" selected="@(string.IsNullOrEmpty(SampleRate))">По умолчанию</option>
+                @foreach (var rate in SampleRates)
+                {
+                    <option value="@rate" selected="@(string.Equals(SampleRate, rate, StringComparison.Ordinal))">@rate Гц</option>
+                }
+            </select>
+        </div>
+
+        <div class="col-lg-6 mb-3">
+            <label class="form-label" for="settings-bitrate">Битрейт</label>
+            <select class="form-select" id="settings-bitrate" name="Bitrate">
+                <option value="" selected="@(string.IsNullOrEmpty(Bitrate))">По умолчанию</option>
+                @foreach (var rate in Bitrates)
+                {
+                    <option value="@rate" selected="@(string.Equals(Bitrate, rate, StringComparison.Ordinal))">@rate кбит/с</option>
+                }
+            </select>
+            <div class="form-text">Каналы всегда моно (1).</div>
+        </div>
+    </div>
+
+    <button class="btn btn-primary" type="submit" name="Command" value="save">Сохранить</button>
+
+    <div class="card mt-4">
+        <div class="card-body">
+            <h2 class="h5">Проверка настроек</h2>
+            <p class="text-muted">
+                Введите короткий текст (до 100 символов) и нажмите «Проверить» — сервис вернёт пробный аудиофайл.
+                Используются значения, указанные в форме выше.
+            </p>
+
+            <div class="row g-2 align-items-end">
+                <div class="col-md-8">
+                    <label class="form-label" for="settings-test-text">Текст для проверки</label>
+                    <input class="form-control" id="settings-test-text" name="TestText" type="text"
+                           maxlength="100" value="@TestText" placeholder="Например: Проверка настроек Звукограма" />
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-outline-primary w-100" type="submit" name="Command" value="test">
+                        Проверить
+                    </button>
+                </div>
+            </div>
+
+            @if (testAudioDataUrl is not null)
+            {
+                <div class="alert alert-success mt-3 mb-0">
+                    <div class="fw-semibold mb-2">Аудиофайл получен</div>
+                    <dl class="row mb-2 small">
+                        <dt class="col-sm-4">Имя файла</dt>
+                        <dd class="col-sm-8">@testAudioName</dd>
+                        <dt class="col-sm-4">Размер</dt>
+                        <dd class="col-sm-8">@((testAudioSize / 1024.0).ToString("0.0")) КБ (@testAudioSize байт)</dd>
+                        <dt class="col-sm-4">Длительность</dt>
+                        <dd class="col-sm-8">@testAudioDuration.ToString("0.0") с</dd>
+                        <dt class="col-sm-4">Формат</dt>
+                        <dd class="col-sm-8">@testAudioFormat</dd>
+                        <dt class="col-sm-4">Частота дискретизации</dt>
+                        <dd class="col-sm-8">@(string.IsNullOrEmpty(SampleRate) ? "по умолчанию" : SampleRate + " Гц")</dd>
+                        <dt class="col-sm-4">Битрейт</dt>
+                        <dd class="col-sm-8">@(string.IsNullOrEmpty(Bitrate) ? "по умолчанию" : Bitrate + " кбит/с")</dd>
+                        <dt class="col-sm-4">Каналы</dt>
+                        <dd class="col-sm-8">моно</dd>
+                    </dl>
+                    <audio id="settings-test-audio" class="w-100" controls autoplay src="@testAudioDataUrl"></audio>
+                    <script>
+                        document.getElementById('settings-test-audio')?.play().catch(function () { });
+                    </script>
+                </div>
+            }
+        </div>
+    </div>
+</form>
+
+</div>
+
+@code {
+    private const int TestTextLimit = 100;
+
+    private static readonly string[] Formats = ["mp3", "wav", "ogg", "opus", "flac"];
+    private static readonly string[] SampleRates = ["24000", "44100", "48000"];
+    private static readonly string[] Bitrates = ["64", "128", "192", "320"];
+
+    private string? error;
+    private bool saved;
+
+    private string? testAudioDataUrl;
+    private string? testAudioName;
+    private string? testAudioFormat;
+    private double testAudioDuration;
+    private int testAudioSize;
+
+    [SupplyParameterFromForm(FormName = "zvukogram-settings")]
+    public string? Email { get; set; }
+
+    [SupplyParameterFromForm(FormName = "zvukogram-settings")]
+    public string? Token { get; set; }
+
+    [SupplyParameterFromForm(FormName = "zvukogram-settings")]
+    public string? Voice { get; set; }
+
+    [SupplyParameterFromForm(FormName = "zvukogram-settings")]
+    public string? Format { get; set; }
+
+    [SupplyParameterFromForm(FormName = "zvukogram-settings")]
+    public string? SampleRate { get; set; }
+
+    [SupplyParameterFromForm(FormName = "zvukogram-settings")]
+    public string? Bitrate { get; set; }
+
+    [SupplyParameterFromForm(FormName = "zvukogram-settings")]
+    public string? TestText { get; set; }
+
+    [SupplyParameterFromForm(FormName = "zvukogram-settings")]
+    public string? Command { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = HttpContextAccessor.HttpContext;
+        if (context is null)
+        {
+            return;
+        }
+
+        if (!HttpMethods.IsPost(context.Request.Method))
+        {
+            var stored = SettingsCookie.Read(context);
+            Email = stored.Email;
+            Token = stored.Token;
+            Voice = stored.Voice;
+            Format = stored.Format;
+            SampleRate = stored.SampleRate;
+            Bitrate = stored.Bitrate;
+            return;
+        }
+
+        Format = Formats.Contains((Format ?? string.Empty).Trim().ToLowerInvariant())
+            ? Format!.Trim().ToLowerInvariant()
+            : "mp3";
+        SampleRate = SampleRates.Contains(SampleRate ?? string.Empty) ? SampleRate : string.Empty;
+        Bitrate = Bitrates.Contains(Bitrate ?? string.Empty) ? Bitrate : string.Empty;
+
+        if (!ValidateSettings())
+        {
+            return;
+        }
+
+        if (string.Equals(Command, "test", StringComparison.Ordinal))
+        {
+            await RunTestAsync();
+            return;
+        }
+
+        var settings = new ZvukogramSettings
+        {
+            Email = Email!.Trim(),
+            Token = Token!.Trim(),
+            Voice = Voice!.Trim(),
+            Format = Format,
+            SampleRate = SampleRate ?? string.Empty,
+            Bitrate = Bitrate ?? string.Empty,
+        };
+
+        SettingsCookie.Write(context, settings);
+        saved = true;
+    }
+
+    private bool ValidateSettings()
+    {
+        if (string.IsNullOrWhiteSpace(Email)
+            || string.IsNullOrWhiteSpace(Token)
+            || string.IsNullOrWhiteSpace(Voice))
+        {
+            error = "Заполните e-mail, API-токен и голос.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task RunTestAsync()
+    {
+        var text = (TestText ?? string.Empty).Trim();
+        if (text.Length == 0)
+        {
+            error = "Введите текст для проверки.";
+            return;
+        }
+
+        if (text.Length > TestTextLimit)
+        {
+            error = $"Текст для проверки не должен превышать {TestTextLimit} символов.";
+            return;
+        }
+
+        var settings = new ZvukogramSettings
+        {
+            Email = Email!.Trim(),
+            Token = Token!.Trim(),
+            Voice = Voice!.Trim(),
+            Format = Format!,
+            SampleRate = SampleRate ?? string.Empty,
+            Bitrate = Bitrate ?? string.Empty,
+        };
+
+        try
+        {
+            var audio = await Zvukogram.SynthesizeAsync(text, settings);
+            testAudioDataUrl = $"data:{audio.ContentType};base64,{Convert.ToBase64String(audio.Content)}";
+            testAudioName = $"test-{DateTime.Now:yyyyMMdd-HHmmss}.{audio.Extension}";
+            testAudioFormat = audio.Format;
+            testAudioDuration = audio.Duration;
+            testAudioSize = audio.Content.Length;
+        }
+        catch (ZvukogramException exception)
+        {
+            error = exception.Message;
+        }
+        catch (Exception exception)
+        {
+            error = $"Не удалось проверить настройки: {exception.Message}";
+        }
+    }
+}

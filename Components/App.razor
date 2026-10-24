@@ -20,17 +20,62 @@
         (function () {
             var scrollKey = 'ankideck.scrollY';
             var previewKey = 'ankideck.focusPreview';
+            var filterKey = 'ankideck.filterFocus';
             var savedScroll = null;
             var focusPreview = false;
+            var pendingFilter = null;
+            var filterTimer = null;
 
             try {
                 savedScroll = sessionStorage.getItem(scrollKey);
                 focusPreview = sessionStorage.getItem(previewKey) === '1';
+                var rawFilter = sessionStorage.getItem(filterKey);
+                pendingFilter = rawFilter ? JSON.parse(rawFilter) : null;
                 sessionStorage.removeItem(scrollKey);
                 sessionStorage.removeItem(previewKey);
+                sessionStorage.removeItem(filterKey);
             } catch (error) {
                 // sessionStorage may be unavailable in private modes; the page then simply starts at the top.
             }
+
+            function rememberFilterFocus(input) {
+                try {
+                    sessionStorage.setItem(filterKey, JSON.stringify({
+                        field: input.getAttribute('data-live-filter'),
+                        caret: typeof input.selectionStart === 'number' ? input.selectionStart : 0
+                    }));
+                } catch (error) {
+                }
+            }
+
+            document.addEventListener('input', function (event) {
+                var input = event.target;
+                if (!input || !input.matches || !input.matches('[data-live-filter]')) {
+                    return;
+                }
+
+                clearTimeout(filterTimer);
+                filterTimer = setTimeout(function () {
+                    rememberFilterFocus(input);
+                    if (input.form) {
+                        input.form.requestSubmit();
+                    }
+                }, 450);
+            });
+
+            document.addEventListener('keydown', function (event) {
+                var input = event.target;
+                if (event.key !== 'Enter' || !input || !input.matches || !input.matches('[data-live-filter]')) {
+                    return;
+                }
+
+                event.preventDefault();
+                clearTimeout(filterTimer);
+                rememberFilterFocus(input);
+                if (input.form) {
+                    input.form.requestSubmit();
+                }
+            });
 
             document.addEventListener('submit', function (event) {
                 if (!event.target || event.target.id !== 'deck-actions-form') {
@@ -49,6 +94,18 @@
 
             window.addEventListener('load', function () {
                 window.requestAnimationFrame(function () {
+                    if (pendingFilter) {
+                        var filterInput = document.querySelector('[data-live-filter="' + pendingFilter.field + '"]');
+                        if (filterInput) {
+                            filterInput.focus({ preventScroll: true });
+                            var caret = typeof pendingFilter.caret === 'number' ? pendingFilter.caret : filterInput.value.length;
+                            try {
+                                filterInput.setSelectionRange(caret, caret);
+                            } catch (error) {
+                            }
+                        }
+                    }
+
                     if (focusPreview) {
                         var preview = document.querySelector('tr.preview-row');
                         if (preview) {

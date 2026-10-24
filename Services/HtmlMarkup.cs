@@ -22,6 +22,11 @@ public static class HtmlMarkup
         @"&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);",
         RegexOptions.Compiled);
 
+    /// <summary>Matches Anki media references such as [sound:file.mp3] or [img:file.png].</summary>
+    private static readonly Regex MediaReferencePattern = new(
+        @"\[(?:sound|img):[^\]]+\]",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>
     /// Checks the Front, Back and Audio fields for HTML markup. A line break is only ignored
     /// when it actually separates visible text; a trailing, leading or lone <c>&lt;br&gt;</c>
@@ -83,6 +88,17 @@ public static class HtmlMarkup
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Converts a field to text suitable for speech synthesis: markup is removed, meaningful
+    /// line breaks become spaces and Anki media references are dropped.
+    /// </summary>
+    public static string ToSpeechText(string html)
+    {
+        var text = Strip(html).Replace("<br>", " ", StringComparison.OrdinalIgnoreCase);
+        text = MediaReferencePattern.Replace(text, " ");
+        return Regex.Replace(text, @"\s+", " ").Trim();
     }
 
     /// <summary>

@@ -3,15 +3,19 @@
 @using AnkiDeck.Services
 @inject ApkgReader Reader
 @inject DeckWorkspaceStore Store
+@inject ZvukogramClient Zvukogram
 @inject IHttpContextAccessor HttpContextAccessor
 
 <PageTitle>Anki</PageTitle>
 
 <div class="container-xxl py-4">
 
-<h1>Anki</h1>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <h1 class="mb-0">Anki</h1>
+    <a class="btn btn-outline-secondary btn-sm" href="/settings">Настройки</a>
+</div>
 
-<p class="text-muted">
+<p class="text-muted mt-2">
     Загрузите файл колоды Anki (<code>.apkg</code>). Сервер прочитает архив, найдёт в нём базу коллекции
     и покажет список заметок.
 </p>
@@ -39,6 +43,13 @@
 @if (error is not null)
 {
     <div class="alert alert-danger" role="alert">@error</div>
+}
+
+@if (workspace is not null && !settingsConfigured)
+{
+    <div class="alert alert-warning" role="alert">
+        Для генерации аудио заполните <a class="alert-link" href="/settings">настройки Звукограм</a>.
+    </div>
 }
 
 @if (workspace is not null)
@@ -85,11 +96,30 @@
                     <thead>
                         <tr>
                             <th scope="col" class="text-muted">#</th>
-                            <th scope="col">Front</th>
-                            <th scope="col">Back</th>
-                            <th scope="col">Audio</th>
+                            <th scope="col">
+                                <input class="form-control column-search" type="text" name="FrontFilter"
+                                       value="@workspace.FrontFilter" maxlength="20" autocomplete="off"
+                                       placeholder="Фильтр" aria-label="Фильтр по полю Front"
+                                       data-live-filter="front" />
+                                <span>Front</span>
+                            </th>
+                            <th scope="col">
+                                <input class="form-control column-search" type="text" name="BackFilter"
+                                       value="@workspace.BackFilter" maxlength="20" autocomplete="off"
+                                       placeholder="Фильтр" aria-label="Фильтр по полю Back"
+                                       data-live-filter="back" />
+                                <span>Back</span>
+                            </th>
                             <th scope="col" class="text-center">
-                                <label class="html-filter" title="Показывать только заметки с HTML-разметкой">
+                                <label class="column-filter" title="Показывать только заметки без аудиофайла">
+                                    <input class="form-check-input" type="checkbox" name="NoAudioOnly" value="true"
+                                           checked="@workspace.ShowNoAudioOnly"
+                                           onchange="this.form.requestSubmit()" />
+                                    <span>Audio</span>
+                                </label>
+                            </th>
+                            <th scope="col" class="text-center">
+                                <label class="column-filter" title="Показывать только заметки с HTML-разметкой">
                                     <input class="form-check-input" type="checkbox" name="HtmlOnly" value="true"
                                            checked="@workspace.ShowHtmlOnly"
                                            onchange="this.form.requestSubmit()" />
@@ -103,11 +133,37 @@
                         @for (var index = 0; index < VisibleNotes.Count; index++)
                         {
                             var note = VisibleNotes[index];
+                            var audioFileName = AudioReference.FirstFileName(note.GetField("Audio"));
                             <tr>
                                 <td class="text-muted">@(index + 1)</td>
                                 <td class="note-field">@note.GetField("Front")</td>
                                 <td class="note-field">@note.GetField("Back")</td>
-                                <td class="note-field">@note.GetField("Audio")</td>
+                                <td class="note-field audio-cell">
+                                    @if (audioFileName is not null)
+                                    {
+                                        <span class="audio-play">
+                                            <button type="button" class="btn btn-outline-success play-audio"
+                                                    onclick="document.getElementById('note-audio-@note.NoteId').play()"
+                                                    title="Прослушать" aria-label="Прослушать @audioFileName">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"
+                                                     fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                                    <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
+                                                </svg>
+                                            </button>
+                                            <audio id="note-audio-@note.NoteId" preload="none"
+                                                   src="/anki/media/@Uri.EscapeDataString(audioFileName)"></audio>
+                                            <span class="audio-name">@audioFileName</span>
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        @note.GetField("Audio")
+                                        <button class="btn btn-outline-primary generate-audio" type="submit"
+                                                name="Action" value="generate:@note.NoteId">
+                                            Сгенерировать
+                                        </button>
+                                    }
+                                </td>
                                 <td class="text-center">
                                     @if (note.HasHtmlMarkup)
                                     {
@@ -156,6 +212,44 @@
                                     </td>
                                 </tr>
                             }
+
+                            @if (workspace.AudioPreviewNoteId == note.NoteId)
+                            {
+                                var generated = workspace.GetGeneratedAudio(note.NoteId);
+                                <tr class="preview-row audio-preview-row">
+                                    <td class="text-muted" aria-label="Сгенерированное аудио">↳</td>
+                                    <td class="note-field">@note.GetField("Front")</td>
+                                    <td class="note-field">@note.GetField("Back")</td>
+                                    <td class="note-field">
+                                        <button type="button" class="btn btn-sm btn-success d-inline-flex align-items-center gap-1"
+                                                onclick="document.getElementById('preview-audio-@note.NoteId').play()"
+                                                aria-label="Прослушать сгенерированное аудио">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+                                                 fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                                <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
+                                            </svg>
+                                            <span>Прослушать</span>
+                                        </button>
+                                        <audio id="preview-audio-@note.NoteId" preload="none"
+                                               src="/anki/audio/@note.NoteId"></audio>
+                                        @if (generated is not null)
+                                        {
+                                            <div class="small text-muted mt-1">
+                                                @generated.Format · @generated.Duration.ToString("0.0") с
+                                            </div>
+                                        }
+                                    </td>
+                                    <td class="text-center">
+                                        <span class="preview-hint">Аудио готово</span>
+                                    </td>
+                                    <td class="text-center">
+                                        <button class="btn btn-sm btn-success" type="submit"
+                                                name="Action" value="confirm-audio:@note.NoteId">
+                                            Подтвердить
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
                         }
                     </tbody>
                 </table>
@@ -163,7 +257,7 @@
 
             @if (FilteredNotes.Count == 0)
             {
-                <p class="text-muted mb-0">Нет заметок с HTML-разметкой.</p>
+                <p class="text-muted mb-0">Нет заметок, подходящих под выбранные фильтры.</p>
             }
             else if (FilteredNotes.Count > DisplayLimit)
             {
@@ -179,9 +273,11 @@
 
 @code {
     private const int DisplayLimit = 500;
+    private const int FilterLength = 20;
 
     private DeckWorkspace? workspace;
     private string? error;
+    private bool settingsConfigured;
 
     [SupplyParameterFromForm(FormName = "anki-upload")]
     public IFormFile? Upload { get; set; }
@@ -193,16 +289,58 @@
     [SupplyParameterFromForm(FormName = "deck-actions")]
     public bool HtmlOnly { get; set; }
 
+    /// <summary>Submitted by the checkbox in the Audio column header.</summary>
+    [SupplyParameterFromForm(FormName = "deck-actions")]
+    public bool NoAudioOnly { get; set; }
+
+    /// <summary>Submitted by the text filter above the Front column.</summary>
+    [SupplyParameterFromForm(FormName = "deck-actions")]
+    public string? FrontFilter { get; set; }
+
+    /// <summary>Submitted by the text filter above the Back column.</summary>
+    [SupplyParameterFromForm(FormName = "deck-actions")]
+    public string? BackFilter { get; set; }
+
     /// <summary>Submitted by the "process everything" button in the statistics block.</summary>
     [SupplyParameterFromForm(FormName = "deck-bulk")]
     public string? BulkAction { get; set; }
 
-    private IReadOnlyList<AnkiNote> FilteredNotes =>
-        workspace is null
-            ? []
-            : workspace.ShowHtmlOnly
-                ? workspace.Notes.Where(note => note.HasHtmlMarkup).ToList()
-                : workspace.Notes.ToList();
+    private IReadOnlyList<AnkiNote> FilteredNotes
+    {
+        get
+        {
+            if (workspace is null)
+            {
+                return [];
+            }
+
+            IEnumerable<AnkiNote> notes = workspace.Notes;
+
+            if (workspace.ShowHtmlOnly)
+            {
+                notes = notes.Where(note => note.HasHtmlMarkup);
+            }
+
+            if (workspace.ShowNoAudioOnly)
+            {
+                notes = notes.Where(note => !AudioReference.IsPresent(note.GetField("Audio")));
+            }
+
+            if (!string.IsNullOrWhiteSpace(workspace.FrontFilter))
+            {
+                notes = notes.Where(note =>
+                    note.GetField("Front").Contains(workspace.FrontFilter, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (!string.IsNullOrWhiteSpace(workspace.BackFilter))
+            {
+                notes = notes.Where(note =>
+                    note.GetField("Back").Contains(workspace.BackFilter, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return notes.ToList();
+        }
+    }
 
     private IReadOnlyList<AnkiNote> VisibleNotes =>
         FilteredNotes.Take(DisplayLimit).ToList();
@@ -212,6 +350,7 @@
         var context = HttpContextAccessor.HttpContext;
         var session = context?.Session;
         var storedId = session?.GetString(DeckWorkspaceStore.SessionKey);
+        settingsConfigured = context is not null && SettingsCookie.Read(context).IsComplete;
 
         if (Upload is not null)
         {
@@ -227,6 +366,9 @@
             {
                 workspace = stored;
                 stored.ShowHtmlOnly = HtmlOnly;
+                stored.ShowNoAudioOnly = NoAudioOnly;
+                stored.FrontFilter = LimitFilter(FrontFilter);
+                stored.BackFilter = LimitFilter(BackFilter);
 
                 if (!string.IsNullOrEmpty(BulkAction))
                 {
@@ -295,6 +437,13 @@
         }
     }
 
+    private static string LimitFilter(string? value) =>
+        string.IsNullOrEmpty(value)
+            ? string.Empty
+            : value.Length <= FilterLength
+                ? value
+                : value[..FilterLength];
+
     private async Task HandleActionAsync(DeckWorkspace current, string action)
     {
         var separator = action.IndexOf(':');
@@ -312,12 +461,66 @@
         switch (action[..separator])
         {
             case "process":
+                current.AudioPreviewNoteId = null;
                 current.ExpandedNoteId = noteId;
+                break;
+
+            case "generate":
+                await GenerateAudioAsync(current, note);
                 break;
 
             case "confirm":
                 await current.ConfirmPreviewAsync(note);
                 break;
+
+            case "confirm-audio":
+                try
+                {
+                    await current.ConfirmGeneratedAudioAsync(note);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    error = exception.Message;
+                }
+
+                break;
+        }
+    }
+
+    private async Task GenerateAudioAsync(DeckWorkspace current, AnkiNote note)
+    {
+        var context = HttpContextAccessor.HttpContext;
+        if (context is null)
+        {
+            return;
+        }
+
+        var settings = SettingsCookie.Read(context);
+        if (!settings.IsComplete)
+        {
+            error = "Заполните настройки Звукограм: e-mail, API-токен и голос.";
+            return;
+        }
+
+        var text = HtmlMarkup.ToSpeechText(note.GetField("Front"));
+        if (text.Length == 0)
+        {
+            error = "Поле Front не содержит текста для озвучки.";
+            return;
+        }
+
+        try
+        {
+            var audio = await Zvukogram.SynthesizeAsync(text, settings, context.RequestAborted);
+            current.SetGeneratedAudio(note.NoteId, audio);
+        }
+        catch (ZvukogramException exception)
+        {
+            error = exception.Message;
+        }
+        catch (Exception exception)
+        {
+            error = $"Не удалось сгенерировать аудио: {exception.Message}";
         }
     }
 }
