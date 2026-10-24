@@ -78,6 +78,8 @@ Services/
   AudioReference.cs                 распознавание [sound:...] и имени файла
   SettingsCookie.cs                 чтение/запись cookie настроек
   ZvukogramClient.cs                клиент API /text
+testdata/
+  synthetic-deck.apkg               тестовая синтетическая колода (старый формат)
 wwwroot/                            favicon и bootstrap.min.css
 ```
 
@@ -429,9 +431,34 @@ dotnet build -v q
 
 ### 13.2 Синтетическая колода
 
-Собрать `.apkg` скриптом на Python: SQLite + zip.
+В репозитории есть готовая тестовая колода:
 
-- Старая схема: таблицы `col`, `notes`, `cards`; JSON в `col.models` / `col.decks`;
+**`testdata/synthetic-deck.apkg`** — старый формат (schema 11, `collection.anki2`,
+`media` в виде JSON, WAV-файлы без zstd-сжатия).
+
+Содержимое: 6 заметок, 6 карточек, один тип заметки `Basic` (Front/Back/Audio),
+две одинаковые тихие WAV-записи (0,25 с, 8 кГц) — `sample.wav` и `Тест файл.wav`.
+
+| № | Front | Back | Audio | Что проверяет |
+|---|---|---|---|---|
+| 1 | `Hola mundo` | `привет мир` | `[sound:sample.wav]` | кнопка Play, обычный файл |
+| 2 | `<b>HTML</b>&nbsp;текст` | `строка<br>с переносом` | — | HTML-бейдж, очистка тегов/сущностей, значимый `<br>` |
+| 3 | `Хвостовой перенос<br>` | `обычный текст` | — | «лишний» `<br>` в конце |
+| 4 | `Без аудио` | `нужна озвучка` | — | кнопка «Сгенерировать» |
+| 5 | `Кириллица` | `файл` | `[sound:Тест файл.wav]` | кириллица/пробел в имени, URL-кодирование |
+| 6 | `Обычная заметка` | `без разметки` | — | заметка без разметки и аудио |
+
+Ожидаемый результат сразу после загрузки:
+
+- в статистике: **6 заметок, 6 карточек, 2 заметки с HTML-разметкой**;
+- **2** кнопки Play (заметки 1 и 5) и **4** кнопки «Сгенерировать»;
+- `GET /anki/media/sample.wav` и `GET /anki/media/Тест%20файл.wav` → `200`, `audio/wav`, 4044 байта;
+- фильтр по Front `hola` оставляет одну заметку.
+
+Колода предназначена для проверки приложения и не содержит пользовательских данных.
+При необходимости собрать другую колоду — скрипт на Python: SQLite + zip (см. ниже).
+
+- Старая схема: таблицы `col`, `notes`, `cards` (+ `revlog`, `graves`); JSON в `col.models` / `col.decks`;
 - Новая схема: `fields`/`notetypes`/`decks`;
 - Для нового формата медиа: `media` — zstd+protobuf, записи — zstd-сжатые.
 
@@ -506,3 +533,68 @@ dotnet run --urls http://127.0.0.1:5180
 | После экспорта пропало медиа | манифест записан в чужом формате (JSON вместо protobuf или наоборот) |
 | Строка с кнопкой выше остальных | кнопка должна быть компактной (`.generate-audio`, `.play-audio`) |
 | Фильтр сбрасывает прокрутку | проверять `App.razor` (scroll/focus restore) |
+
+---
+
+## 16. Документация и источники
+
+### 16.1 Звукограм — основной внешний источник
+
+Использовалась официальная документация API (методы, параметры, лимиты, форматы, коды ошибок):
+
+- **API Звукограма** — <https://zvukogram.com/node/api/>
+  - метод `/text` (озвучка до 1000 символов, мгновенный ответ со ссылкой на файл);
+  - параметры `token`, `email`, `voice`, `text`, `format`, `channels`, `sample_rate`,
+    `bitrate`, `speed`, `pitch`, `style` и др.;
+  - форматы `mp3`, `wav`, `ogg`, `opus`, `flac`;
+  - коды статуса `0`, `1`, `-1` и поле `error`;
+  - методы `/longtext` и `/result` (в проекте пока не реализованы).
+- **Список голосов** — <https://zvukogram.com/index.php?r=api/voices>
+  (использовался для изучения формата; в текущей версии голос вводится строкой).
+- **Примеры запросов на GitHub** — <https://github.com/zvukogramcom/api>
+
+### 16.2 Anki
+
+Официальной единой спецификации `.apkg` нет; формат коллекции и медиа разбирался
+по реальным файлам и исходникам Anki:
+
+- **Репозиторий Anki** (исходный код, схемы SQLite, логика экспорта) —
+  <https://github.com/ankitects/anki>
+- **Руководство пользователя Anki** — <https://docs.ankiweb.net/manual/intro>
+  - экспорт колод: <https://docs.ankiweb.net/manual/exporting>
+  - медиафайлы: <https://docs.ankiweb.net/manual/media>
+
+Ключевые особенности формата, установленные при разборе:
+
+- `collection.anki21b` — zstd-сжатый SQLite (schema 18), старые — `collection.anki21` / `collection.anki2`;
+- collation `unicase` в schema 18;
+- новый формат медиа: `media` — zstd-сжатый protobuf, zip-записи — zstd-сжатые файлы;
+- старый формат: `media` — JSON, zip-записи — сырые файлы.
+
+### 16.3 ASP.NET Core / .NET
+
+Справочная документация по механизмам, на которых построено приложение:
+
+- Статические SSR-формы и `[SupplyParameterFromForm]` —
+  <https://learn.microsoft.com/aspnet/core/blazor/forms/>
+- Загрузка файлов в Blazor (в проекте — форма с `IFormFile`) —
+  <https://learn.microsoft.com/aspnet/core/blazor/file-uploads>
+- Minimal API и возврат файлов (`Results.File`) —
+  <https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/responses>
+- Состояние приложения и сессии —
+  <https://learn.microsoft.com/aspnet/core/fundamentals/app-state>
+- `Microsoft.Data.Sqlite` (подключение, параметры, collations) —
+  <https://learn.microsoft.com/dotnet/standard/data/sqlite/>
+- `HttpClient` и обработка сетевых ошибок —
+  <https://learn.microsoft.com/dotnet/fundamentals/networking/http/httpclient>
+- Статические файлы и `MapStaticAssets` —
+  <https://learn.microsoft.com/aspnet/core/fundamentals/static-files>
+
+### 16.4 Библиотеки
+
+- **ZstdSharp.Port** (zstd для .NET) — <https://github.com/oleg-st/ZstdSharp>
+- **Bootstrap 5** (стили таблицы, кнопок, форм) — <https://getbootstrap.com/docs/5.3/>
+- **NuGet: Microsoft.Data.Sqlite** —
+  <https://www.nuget.org/packages/Microsoft.Data.Sqlite/>
+- **NuGet: ZstdSharp.Port** — <https://www.nuget.org/packages/ZstdSharp.Port/>
+
