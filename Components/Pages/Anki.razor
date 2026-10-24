@@ -1,0 +1,168 @@
+@page "/anki"
+@using AnkiDeck.Models
+@using AnkiDeck.Services
+@inject ApkgReader Reader
+
+<PageTitle>Anki</PageTitle>
+
+<h1>Anki</h1>
+
+<p class="text-muted">
+    Загрузите файл колоды Anki (<code>.apkg</code>). Сервер прочитает архив, найдёт в нём базу коллекции
+    и покажет список заметок.
+</p>
+
+<form method="post" enctype="multipart/form-data" @formname="anki-upload" class="mb-4">
+    <AntiforgeryToken />
+    <div class="mb-3">
+        <label class="form-label" for="deck-file">Файл колоды</label>
+        <input class="form-control" id="deck-file" name="Upload" type="file" accept=".apkg" required />
+        <div class="form-text">Поддерживаются файлы до 512 МБ, в том числе новый сжатый формат Anki.</div>
+    </div>
+    <button class="btn btn-primary" type="submit">Загрузить и прочитать</button>
+</form>
+
+@if (error is not null)
+{
+    <div class="alert alert-danger" role="alert">@error</div>
+}
+
+@if (result is not null)
+{
+    <div class="alert alert-success" role="status">
+        <div>
+            Файл <strong>@result.FileName</strong> прочитан за
+            @result.Elapsed.TotalSeconds.ToString("0.0") с.
+        </div>
+        <div>
+            Найдено заметок: <strong>@result.NoteCount</strong>,
+            карточек: <strong>@result.CardCount</strong>.
+        </div>
+        <div>
+            Заметок с HTML-разметкой:
+            <strong>@result.NotesWithHtmlCount</strong>.
+        </div>
+        <div class="small text-muted">
+            Источник данных: @result.CollectionEntry
+        </div>
+    </div>
+
+    @foreach (var warning in result.Warnings)
+    {
+        <div class="alert alert-warning" role="alert">@warning</div>
+    }
+
+    @if (result.Notes.Count > 0)
+    {
+        <h2 class="h4 mt-4">Список заметок</h2>
+
+        <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle deck-table">
+                <thead>
+                    <tr>
+                        <th scope="col" class="text-muted">#</th>
+                        <th scope="col">Front</th>
+                        <th scope="col">Back</th>
+                        <th scope="col">Audio</th>
+                        <th scope="col" class="text-center">HTML</th>
+                        <th scope="col">Теги</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (var index = 0; index < VisibleNotes.Count; index++)
+                    {
+                        var note = VisibleNotes[index];
+                        <tr>
+                            <td class="text-muted">@(index + 1)</td>
+                            <td class="note-field">@note.GetField("Front")</td>
+                            <td class="note-field">@note.GetField("Back")</td>
+                            <td class="note-field">@note.GetField("Audio")</td>
+                            <td class="text-center">
+                                @if (note.HasHtmlMarkup)
+                                {
+                                    <span class="html-mark" role="img" title="Содержит HTML-разметку" aria-label="Содержит HTML-разметку">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                                             fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                            <path d="M5.854 4.646a.5.5 0 0 1 0 .708L3.207 8l2.647 2.646a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 0 1 .708 0zm4.292 0a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-3 3a.5.5 0 0 1-.708-.708L12.793 8l-2.647-2.646a.5.5 0 0 1 0-.708z"/>
+                                        </svg>
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                            </td>
+                            <td>
+                                @if (note.Tags.Count == 0)
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                                else
+                                {
+                                    @foreach (var tag in note.Tags)
+                                    {
+                                        <span class="badge text-bg-secondary me-1">@tag</span>
+                                    }
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (result.Notes.Count > DisplayLimit)
+        {
+            <p class="text-muted">
+                Показаны первые @DisplayLimit из @result.Notes.Count заметок.
+            </p>
+        }
+    }
+}
+
+@code {
+    private const int DisplayLimit = 500;
+
+    private AnkiDeckInspection? result;
+    private string? error;
+
+    [SupplyParameterFromForm(FormName = "anki-upload")]
+    public IFormFile? Upload { get; set; }
+
+    private IReadOnlyList<AnkiNote> VisibleNotes =>
+        result is null ? [] : result.Notes.Take(DisplayLimit).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Upload is null)
+        {
+            return;
+        }
+
+        if (Upload.Length == 0)
+        {
+            error = "Выбранный файл пуст.";
+            return;
+        }
+
+        if (!string.Equals(Path.GetExtension(Upload.FileName), ".apkg", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Нужен файл колоды Anki с расширением .apkg.";
+            return;
+        }
+
+        try
+        {
+            await using var stream = Upload.OpenReadStream();
+            result = await Reader.ReadAsync(stream, Upload.FileName);
+        }
+        catch (InvalidDataException exception)
+        {
+            error = exception.Message;
+        }
+        catch (Exception exception)
+        {
+            error = $"Не удалось прочитать колоду: {exception.Message}";
+        }
+    }
+}

@@ -1,0 +1,15 @@
+.deck-table {
+    font-size: 0.875rem;
+}
+
+.note-field {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+}
+
+.html-mark {
+    color: var(--bs-warning-text-emphasis, #664d03);
+    display: inline-flex;
+    vertical-align: middle;
+}
