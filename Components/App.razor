@@ -124,6 +124,136 @@
             });
         })();
     </script>
+    <script>
+        (function () {
+            var modal = document.getElementById('audio-job-modal');
+            if (!modal) {
+                return;
+            }
+
+            var statusEl = document.getElementById('audio-job-status');
+            var progressEl = document.getElementById('audio-job-progress');
+            var barEl = document.getElementById('audio-job-bar');
+            var notesEl = document.getElementById('audio-job-notes');
+            var filesEl = document.getElementById('audio-job-files');
+            var currentEl = document.getElementById('audio-job-current');
+            var errorEl = document.getElementById('audio-job-error');
+            var pauseBtn = document.getElementById('audio-job-pause');
+            var cancelBtn = document.getElementById('audio-job-cancel');
+            var closeBtn = document.getElementById('audio-job-close');
+            var timer = null;
+            var state = 'idle';
+
+            function isTerminal(value) {
+                return value === 'completed' || value === 'cancelled' || value === 'failed';
+            }
+
+            function render(data) {
+                state = data.status || 'idle';
+                if (!data.active && state === 'idle') {
+                    modal.hidden = true;
+                    return;
+                }
+
+                modal.hidden = false;
+
+                var totalNotes = data.totalNotes || 0;
+                var completedNotes = data.completedNotes || 0;
+                var totalSegments = data.totalSegments || 0;
+                var completedSegments = data.completedSegments || 0;
+                var percent = totalSegments > 0
+                    ? Math.min(100, Math.round(completedSegments * 100 / totalSegments))
+                    : 0;
+
+                barEl.style.width = percent + '%';
+                progressEl.setAttribute('aria-valuenow', String(percent));
+                notesEl.textContent = completedNotes + ' / ' + totalNotes;
+                filesEl.textContent = completedSegments + ' / ' + totalSegments;
+                currentEl.textContent = data.currentText || '—';
+
+                var labels = {
+                    running: 'Выполняется…',
+                    paused: 'Пауза',
+                    cancelling: 'Отмена…',
+                    completed: 'Готово',
+                    cancelled: 'Отменено',
+                    failed: 'Ошибка'
+                };
+                statusEl.textContent = labels[state] || state;
+
+                if (data.error) {
+                    errorEl.textContent = data.error;
+                    errorEl.classList.remove('d-none');
+                } else {
+                    errorEl.classList.add('d-none');
+                }
+
+                var terminal = isTerminal(state);
+                pauseBtn.disabled = terminal || state === 'cancelling';
+                pauseBtn.textContent = state === 'paused' ? 'Продолжить' : 'Пауза';
+                cancelBtn.disabled = terminal || state === 'cancelling';
+                closeBtn.classList.toggle('d-none', !terminal);
+
+                if (!terminal) {
+                    schedule();
+                } else if (timer) {
+                    clearTimeout(timer);
+                    timer = null;
+                }
+            }
+
+            function schedule() {
+                if (timer) {
+                    return;
+                }
+
+                timer = setTimeout(function () {
+                    timer = null;
+                    refresh();
+                }, 700);
+            }
+
+            function refresh() {
+                fetch('/anki/audio-job/progress', { headers: { Accept: 'application/json' } })
+                    .then(function (response) {
+                        if (!response.ok) {
+                            throw new Error('HTTP ' + response.status);
+                        }
+                        return response.json();
+                    })
+                    .then(render)
+                    .catch(function () {
+                        if (!modal.hidden) {
+                            schedule();
+                        }
+                    });
+            }
+
+            function control(action) {
+                fetch('/anki/audio-job/' + action, {
+                    method: 'POST',
+                    headers: { Accept: 'application/json' }
+                })
+                    .then(function (response) { return response.json(); })
+                    .then(render)
+                    .catch(function () { });
+            }
+
+            pauseBtn.addEventListener('click', function () {
+                control(state === 'paused' ? 'resume' : 'pause');
+            });
+            cancelBtn.addEventListener('click', function () {
+                control('cancel');
+            });
+            closeBtn.addEventListener('click', function () {
+                modal.hidden = true;
+                fetch('/anki/audio-job/dismiss', { method: 'POST' })
+                    .catch(function () { });
+            });
+
+            refresh();
+        })();
+    </script>
 </body>
 
 </html>

@@ -47,11 +47,19 @@ public sealed class ZvukogramClient
                 $"Текст для озвучки длиннее {MaxTextLength} символов. Сократите поле Front.");
         }
 
+        var voice = VoiceSelector.Resolve(settings, text);
+        if (string.IsNullOrWhiteSpace(voice))
+        {
+            throw new ZvukogramException(VoiceSelector.PrefersFemaleVoice(text)
+                ? "Текст начинается с «la », но женский голос не задан. Укажите его в настройках."
+                : "Не задан голос для озвучивания. Укажите мужской голос в настройках.");
+        }
+
         var values = new Dictionary<string, string>
         {
             ["token"] = settings.Token.Trim(),
             ["email"] = settings.Email.Trim(),
-            ["voice"] = settings.Voice.Trim(),
+            ["voice"] = voice,
             ["text"] = text,
             ["format"] = NormalizeFormat(settings.Format),
             ["channels"] = "1",

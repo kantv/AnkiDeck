@@ -102,6 +102,41 @@ public static class HtmlMarkup
     }
 
     /// <summary>
+    /// Splits the Front field into independently synthesized segments:
+    /// the part before the first "/", then by commas, semicolons and &lt;br&gt; tags.
+    /// </summary>
+    public static IReadOnlyList<string> SplitForSpeech(string? html)
+    {
+        if (string.IsNullOrEmpty(html))
+        {
+            return [];
+        }
+
+        var text = Strip(LineBreakTagPattern.Replace(html, "\n"));
+        text = MediaReferencePattern.Replace(text, " ");
+
+        var slash = text.IndexOf('/');
+        if (slash >= 0)
+        {
+            text = text[..slash];
+        }
+
+        text = text.Replace(',', '\n').Replace(';', '\n');
+
+        var segments = new List<string>();
+        foreach (var part in text.Split('\n'))
+        {
+            var segment = Regex.Replace(part, @"\s+", " ").Trim();
+            if (segment.Length > 0)
+            {
+                segments.Add(segment);
+            }
+        }
+
+        return segments;
+    }
+
+    /// <summary>
     /// Removes HTML tags and decodes character entities. Meaningful line breaks are kept as
     /// literal <c>&lt;br&gt;</c> text; line breaks that separate nothing are dropped.
     /// </summary>

@@ -9,7 +9,15 @@ public sealed class ZvukogramSettings
 
     public string Token { get; set; } = string.Empty;
 
-    public string Voice { get; set; } = string.Empty;
+    /// <summary>
+    /// Male voice name used for synthesis. The JSON name stays "voice" so settings saved by
+    /// earlier versions of the app keep working.
+    /// </summary>
+    [JsonPropertyName("voice")]
+    public string MaleVoice { get; set; } = string.Empty;
+
+    /// <summary>Female voice name, reserved for feminine nouns; not used for synthesis yet.</summary>
+    public string FemaleVoice { get; set; } = string.Empty;
 
     public string Format { get; set; } = "mp3";
 
@@ -23,5 +31,5 @@ public sealed class ZvukogramSettings
     public bool IsComplete =>
         !string.IsNullOrWhiteSpace(Email)
         && !string.IsNullOrWhiteSpace(Token)
-        && !string.IsNullOrWhiteSpace(Voice);
+        && !string.IsNullOrWhiteSpace(MaleVoice);
 }

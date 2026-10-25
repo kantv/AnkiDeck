@@ -47,17 +47,29 @@
 
     <div class="row">
         <div class="col-lg-6 mb-3">
-            <label class="form-label" for="settings-voice">Имя голоса</label>
-            <input class="form-control" id="settings-voice" name="Voice" type="text"
-                   value="@Voice" required />
+            <label class="form-label" for="settings-male-voice">Мужской голос</label>
+            <input class="form-control" id="settings-male-voice" name="MaleVoice" type="text"
+                   value="@MaleVoice" required />
             <div class="form-text">
-                Имя голоса из
+                Используется по умолчанию. Имя из
                 <a href="https://zvukogram.com/index.php?r=api/voices" target="_blank" rel="noopener">списка голосов</a>,
                 например <code>Matthew plus</code> или <code>Мартын</code>.
             </div>
         </div>
 
         <div class="col-lg-6 mb-3">
+            <label class="form-label" for="settings-female-voice">Женский голос</label>
+            <input class="form-control" id="settings-female-voice" name="FemaleVoice" type="text"
+                   value="@FemaleVoice" />
+            <div class="form-text">
+                Используется, если озвучиваемый текст начинается с «la » (например, <code>la casa</code>;
+                регистр не важен). Для остальных текстов применяется мужской голос.
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-4 mb-3">
             <label class="form-label" for="settings-format">Формат</label>
             <select class="form-select" id="settings-format" name="Format">
                 @foreach (var format in Formats)
@@ -66,10 +78,8 @@
                 }
             </select>
         </div>
-    </div>
 
-    <div class="row">
-        <div class="col-lg-6 mb-3">
+        <div class="col-lg-4 mb-3">
             <label class="form-label" for="settings-sample-rate">Частота дискретизации</label>
             <select class="form-select" id="settings-sample-rate" name="SampleRate">
                 <option value="" selected="@(string.IsNullOrEmpty(SampleRate))">По умолчанию</option>
@@ -80,7 +90,7 @@
             </select>
         </div>
 
-        <div class="col-lg-6 mb-3">
+        <div class="col-lg-4 mb-3">
             <label class="form-label" for="settings-bitrate">Битрейт</label>
             <select class="form-select" id="settings-bitrate" name="Bitrate">
                 <option value="" selected="@(string.IsNullOrEmpty(Bitrate))">По умолчанию</option>
@@ -171,7 +181,10 @@
     public string? Token { get; set; }
 
     [SupplyParameterFromForm(FormName = "zvukogram-settings")]
-    public string? Voice { get; set; }
+    public string? MaleVoice { get; set; }
+
+    [SupplyParameterFromForm(FormName = "zvukogram-settings")]
+    public string? FemaleVoice { get; set; }
 
     [SupplyParameterFromForm(FormName = "zvukogram-settings")]
     public string? Format { get; set; }
@@ -201,7 +214,8 @@
             var stored = SettingsCookie.Read(context);
             Email = stored.Email;
             Token = stored.Token;
-            Voice = stored.Voice;
+            MaleVoice = stored.MaleVoice;
+            FemaleVoice = stored.FemaleVoice;
             Format = stored.Format;
             SampleRate = stored.SampleRate;
             Bitrate = stored.Bitrate;
@@ -229,7 +243,8 @@
         {
             Email = Email!.Trim(),
             Token = Token!.Trim(),
-            Voice = Voice!.Trim(),
+            MaleVoice = MaleVoice!.Trim(),
+            FemaleVoice = (FemaleVoice ?? string.Empty).Trim(),
             Format = Format,
             SampleRate = SampleRate ?? string.Empty,
             Bitrate = Bitrate ?? string.Empty,
@@ -243,9 +258,9 @@
     {
         if (string.IsNullOrWhiteSpace(Email)
             || string.IsNullOrWhiteSpace(Token)
-            || string.IsNullOrWhiteSpace(Voice))
+            || string.IsNullOrWhiteSpace(MaleVoice))
         {
-            error = "Заполните e-mail, API-токен и голос.";
+            error = "Заполните e-mail, API-токен и мужской голос.";
             return false;
         }
 
@@ -271,7 +286,8 @@
         {
             Email = Email!.Trim(),
             Token = Token!.Trim(),
-            Voice = Voice!.Trim(),
+            MaleVoice = MaleVoice!.Trim(),
+            FemaleVoice = (FemaleVoice ?? string.Empty).Trim(),
             Format = Format!,
             SampleRate = SampleRate ?? string.Empty,
             Bitrate = Bitrate ?? string.Empty,

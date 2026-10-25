@@ -24,4 +24,18 @@ public static class AudioReference
         var match = SoundPattern.Match(fieldValue);
         return match.Success ? match.Groups[1].Value : null;
     }
+
+    /// <summary>Returns all [sound:...] file names found in the value.</summary>
+    public static IEnumerable<string> AllFileNames(string? fieldValue)
+    {
+        if (string.IsNullOrEmpty(fieldValue))
+        {
+            yield break;
+        }
+
+        foreach (Match match in SoundPattern.Matches(fieldValue))
+        {
+            yield return match.Groups[1].Value;
+        }
+    }
 }

@@ -84,10 +84,14 @@
 }
 
 .audio-play[b-48k1pm9ytx] {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: 0.35rem;
-    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.audio-play + .audio-play[b-48k1pm9ytx] {
+    margin-top: 0.15rem;
 }
 
 .play-audio[b-48k1pm9ytx] {
@@ -107,4 +111,32 @@
 
 .audio-preview-row audio[b-48k1pm9ytx] {
     display: none;
+}
+
+.audio-job-overlay[b-48k1pm9ytx] {
+    position: fixed;
+    inset: 0;
+    z-index: 1055;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(0, 0, 0, 0.45);
+}
+
+.audio-job-overlay[hidden][b-48k1pm9ytx] {
+    display: none;
+}
+
+.audio-job-dialog[b-48k1pm9ytx] {
+    width: 100%;
+    max-width: 540px;
+    padding: 1.5rem;
+    background: #fff;
+    border-radius: 0.5rem;
+    box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.35);
+}
+
+.audio-job-status[b-48k1pm9ytx] {
+    font-weight: 600;
 }

@@ -42,7 +42,8 @@ public sealed class DeckWorkspace : IDisposable
     private readonly List<MediaManifestEntry>? _mediaProtobufEntries;
     private readonly bool _mediaCompressed;
     private readonly List<PendingMedia> _pendingMedia = new();
-    private readonly Dictionary<long, GeneratedAudio> _generatedAudio = new();
+    private readonly HashSet<string> _removedMediaNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<long, List<GeneratedAudioFile>> _generatedAudio = new();
 
     private DeckWorkspace(
         string workingDirectory,
@@ -105,7 +106,11 @@ public sealed class DeckWorkspace : IDisposable
     /// <summary>Note whose generated-audio preview row is currently expanded, if any.</summary>
     public long? AudioPreviewNoteId { get; set; }
 
-    public GeneratedAudio? GetGeneratedAudio(long noteId) => _generatedAudio.GetValueOrDefault(noteId);
+    /// <summary>Background "refresh all audio" operation, if any.</summary>
+    public BulkAudioJob? AudioJob { get; set; }
+
+    public IReadOnlyList<GeneratedAudioFile> GetGeneratedAudioFiles(long noteId) =>
+        _generatedAudio.GetValueOrDefault(noteId) ?? [];
 
     /// <summary>Reads a media file of the deck (existing or generated) so the browser can play it.</summary>
     public async Task<(byte[] Content, string ContentType)?> TryReadMediaAsync(
@@ -123,6 +128,11 @@ public sealed class DeckWorkspace : IDisposable
             {
                 return (media.Content, GetContentType(fileName));
             }
+        }
+
+        if (_removedMediaNames.Contains(fileName))
+        {
+            return null;
         }
 
         string? entryName = null;
@@ -172,33 +182,121 @@ public sealed class DeckWorkspace : IDisposable
             _ => "application/octet-stream",
         };
 
-    public void SetGeneratedAudio(long noteId, GeneratedAudio audio)
+    private static bool IsAudioFile(string fileName) =>
+        GetContentType(fileName).StartsWith("audio/", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Counts audio files registered in the deck (including generated but unexported ones) and
+    /// how many of them are not referenced by any [sound:...] in any note field.
+    /// </summary>
+    public (int Total, int Unused) GetAudioStatistics()
     {
-        _generatedAudio[noteId] = audio;
+        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var note in _notes)
+        {
+            foreach (var field in note.Fields)
+            {
+                foreach (var fileName in AudioReference.AllFileNames(field.Value))
+                {
+                    referenced.Add(fileName);
+                }
+            }
+        }
+
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fileName in _mediaEntries.Values)
+        {
+            if (!_removedMediaNames.Contains(fileName) && IsAudioFile(fileName))
+            {
+                files.Add(fileName);
+            }
+        }
+
+        foreach (var media in _pendingMedia)
+        {
+            if (IsAudioFile(media.FileName))
+            {
+                files.Add(media.FileName);
+            }
+        }
+
+        var unused = files.Count(fileName => !referenced.Contains(fileName));
+        return (files.Count, unused);
+    }
+
+    public void SetGeneratedAudio(long noteId, IReadOnlyList<GeneratedAudioFile> files)
+    {
+        _generatedAudio[noteId] = files.ToList();
         AudioPreviewNoteId = noteId;
         ExpandedNoteId = null;
     }
 
     /// <summary>
-    /// Writes the generated audio into the note's Audio field and registers the file for export.
-    /// The file name is derived from the Front field and made unique inside the deck.
+    /// Writes the generated audio files into the note's Audio field and registers them for export.
+    /// File names are derived from the text segment each file was generated from.
     /// </summary>
-    public async Task<string> ConfirmGeneratedAudioAsync(AnkiNote note, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string>> AttachAudioAsync(
+        AnkiNote note,
+        IReadOnlyList<GeneratedAudioFile> files,
+        CancellationToken cancellationToken = default)
     {
-        if (!_generatedAudio.TryGetValue(note.NoteId, out var audio))
+        if (files.Count == 0)
         {
-            throw new InvalidOperationException("Аудио для этой заметки не найдено — сгенерируйте его заново.");
+            throw new InvalidOperationException("Нет сгенерированных аудиофайлов.");
         }
 
-        if (!note.Fields.Any(field => IsAudioField(field.Name)))
+        var audioField = note.Fields.FirstOrDefault(field => IsAudioField(field.Name));
+        if (audioField is null)
         {
             throw new InvalidOperationException("У заметки нет поля Audio.");
         }
 
-        var fileName = CreateMediaFileName(note.GetField("Front"), audio.Extension);
+        var oldNames = AudioReference.AllFileNames(audioField.Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // References in all other fields/notes keep the old file alive.
+        var remainingReferences = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var otherNote in _notes)
+        {
+            foreach (var field in otherNote.Fields)
+            {
+                if (otherNote.NoteId == note.NoteId && IsAudioField(field.Name))
+                {
+                    continue;
+                }
+
+                foreach (var referenced in AudioReference.AllFileNames(field.Value))
+                {
+                    remainingReferences.Add(referenced);
+                }
+            }
+        }
+
+        foreach (var oldName in oldNames)
+        {
+            if (!remainingReferences.Contains(oldName))
+            {
+                RemoveMedia(oldName);
+            }
+        }
+
+        var fileNames = new List<string>(files.Count);
+        foreach (var file in files)
+        {
+            var fileName = CreateMediaFileName(file.Text, file.Audio.Extension);
+            fileNames.Add(fileName);
+
+            _pendingMedia.RemoveAll(media =>
+                string.Equals(media.FileName, fileName, StringComparison.OrdinalIgnoreCase));
+            _pendingMedia.Add(new PendingMedia(fileName, file.Audio.Content));
+            _removedMediaNames.Remove(fileName);
+        }
+
+        var audioValue = string.Concat(fileNames.Select(fileName => $"[sound:{fileName}]"));
         var fields = note.Fields
             .Select(field => IsAudioField(field.Name)
-                ? new AnkiField(field.Name, $"[sound:{fileName}]")
+                ? new AnkiField(field.Name, audioValue)
                 : field)
             .ToList();
 
@@ -206,12 +304,32 @@ public sealed class DeckWorkspace : IDisposable
         await WriteNoteAsync(connection, transaction: null, note.NoteId, fields, cancellationToken);
 
         ReplaceNote(new AnkiNote(note.NoteId, fields, HtmlMarkup.IsPresent(fields)));
+        return fileNames;
+    }
 
-        _pendingMedia.Add(new PendingMedia(fileName, audio.Content));
+    private void RemoveMedia(string fileName)
+    {
+        _pendingMedia.RemoveAll(media =>
+            string.Equals(media.FileName, fileName, StringComparison.OrdinalIgnoreCase));
+        _removedMediaNames.Add(fileName);
+    }
+
+    /// <summary>Confirms the audio files generated for the note's preview row.</summary>
+    public async Task<IReadOnlyList<string>> ConfirmGeneratedAudioAsync(
+        AnkiNote note,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_generatedAudio.TryGetValue(note.NoteId, out var files))
+        {
+            throw new InvalidOperationException("Аудио для этой заметки не найдено — сгенерируйте его заново.");
+        }
+
+        var fileNames = await AttachAudioAsync(note, files, cancellationToken);
+
         _generatedAudio.Remove(note.NoteId);
         AudioPreviewNoteId = null;
 
-        return fileName;
+        return fileNames;
     }
 
     public static async Task<DeckWorkspace> CreateAsync(
@@ -316,41 +434,72 @@ public sealed class DeckWorkspace : IDisposable
 
         using var source = ZipFile.OpenRead(_packagePath);
 
-        var mediaMap = new Dictionary<string, string>(_mediaEntries, StringComparer.Ordinal);
+        var mediaChanged = _pendingMedia.Count > 0 || _removedMediaNames.Count > 0;
+
+        var pendingByName = new Dictionary<string, PendingMedia>(StringComparer.OrdinalIgnoreCase);
+        var pendingOrder = new List<string>();
+        foreach (var media in _pendingMedia)
+        {
+            if (!pendingByName.ContainsKey(media.FileName))
+            {
+                pendingOrder.Add(media.FileName);
+            }
+
+            pendingByName[media.FileName] = media;
+        }
+
+        var originalEntries = _mediaEntries
+            .Select(pair => (Id: pair.Key, Name: pair.Value))
+            .OrderBy(item => int.TryParse(item.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number)
+                ? number
+                : int.MaxValue)
+            .ToList();
+
+        var finalMedia = new List<(string Name, string? SourceId, PendingMedia? Pending)>();
+        if (mediaChanged)
+        {
+            foreach (var item in originalEntries)
+            {
+                if (_removedMediaNames.Contains(item.Name) || pendingByName.ContainsKey(item.Name))
+                {
+                    continue;
+                }
+
+                finalMedia.Add((item.Name, item.Id, null));
+            }
+
+            foreach (var name in pendingOrder)
+            {
+                finalMedia.Add((name, null, pendingByName[name]));
+            }
+        }
+
+        var mediaMap = mediaChanged
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(_mediaEntries, StringComparer.Ordinal);
+
+        var manifest = new List<MediaManifestEntry>();
         var usedEntryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in source.Entries)
         {
-            usedEntryNames.Add(entry.FullName);
-        }
-
-        var nextMediaId = mediaMap.Keys
-            .Select(key => int.TryParse(key, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number : -1)
-            .DefaultIfEmpty(-1)
-            .Max() + 1;
-
-        var pendingMedia = new List<PendingMediaEntry>();
-        foreach (var media in _pendingMedia)
-        {
-            string entryName;
-            do
+            if (!mediaChanged || !_mediaEntries.ContainsKey(entry.FullName))
             {
-                entryName = nextMediaId.ToString(CultureInfo.InvariantCulture);
-                nextMediaId++;
+                usedEntryNames.Add(entry.FullName);
             }
-            while (usedEntryNames.Contains(entryName));
-
-            usedEntryNames.Add(entryName);
-            mediaMap[entryName] = media.FileName;
-            pendingMedia.Add(new PendingMediaEntry(
-                entryName,
-                media,
-                new MediaManifestEntry(
-                    media.FileName,
-                    (uint)media.Content.Length,
-                    SHA1.HashData(media.Content))));
         }
 
-        var rewriteMediaEntry = pendingMedia.Count > 0;
+        MediaManifestEntry? FindOriginalManifest(string id)
+        {
+            if (_mediaProtobufEntries is null
+                || !int.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index)
+                || index < 0
+                || index >= _mediaProtobufEntries.Count)
+            {
+                return null;
+            }
+
+            return _mediaProtobufEntries[index];
+        }
 
         using (var targetStream = new FileStream(
             exportPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
@@ -367,7 +516,9 @@ public sealed class DeckWorkspace : IDisposable
                     continue;
                 }
 
-                if (rewriteMediaEntry && string.Equals(entry.FullName, MediaEntryName, StringComparison.Ordinal))
+                if (mediaChanged
+                    && (string.Equals(entry.FullName, MediaEntryName, StringComparison.Ordinal)
+                        || _mediaEntries.ContainsKey(entry.FullName)))
                 {
                     continue;
                 }
@@ -378,24 +529,77 @@ public sealed class DeckWorkspace : IDisposable
                 await input.CopyToAsync(destination, cancellationToken);
             }
 
-            foreach (var pending in pendingMedia)
+            if (mediaChanged)
             {
-                var content = _mediaCompressed ? CompressZstd(pending.Media.Content) : pending.Media.Content;
-                var created = target.CreateEntry(pending.EntryName, CompressionLevel.Optimal);
-                await using var destination = created.Open();
-                await destination.WriteAsync(content, cancellationToken);
-            }
+                var nextMediaId = 0;
+                foreach (var item in finalMedia)
+                {
+                    byte[] stored;
+                    MediaManifestEntry manifestEntry;
 
-            if (rewriteMediaEntry)
-            {
+                    if (item.Pending is { } pending)
+                    {
+                        var content = pending.Content;
+                        stored = _mediaCompressed ? CompressZstd(content) : content;
+                        manifestEntry = new MediaManifestEntry(
+                            item.Name,
+                            (uint)content.Length,
+                            SHA1.HashData(content));
+                    }
+                    else
+                    {
+                        var sourceEntry = source.GetEntry(item.SourceId!);
+                        if (sourceEntry is null)
+                        {
+                            continue;
+                        }
+
+                        using var buffer = new MemoryStream();
+                        await using (var input = sourceEntry.Open())
+                        {
+                            await input.CopyToAsync(buffer, cancellationToken);
+                        }
+
+                        stored = buffer.ToArray();
+
+                        var original = FindOriginalManifest(item.SourceId!);
+                        if (original is { } metadata)
+                        {
+                            manifestEntry = new MediaManifestEntry(item.Name, metadata.Size, metadata.Sha1);
+                        }
+                        else
+                        {
+                            var raw = _mediaCompressed && IsZstd(stored) ? DecompressZstd(stored) : stored;
+                            manifestEntry = new MediaManifestEntry(
+                                item.Name,
+                                (uint)raw.Length,
+                                SHA1.HashData(raw));
+                        }
+                    }
+
+                    string entryName;
+                    do
+                    {
+                        entryName = nextMediaId.ToString(CultureInfo.InvariantCulture);
+                        nextMediaId++;
+                    }
+                    while (usedEntryNames.Contains(entryName));
+
+                    usedEntryNames.Add(entryName);
+                    mediaMap[entryName] = item.Name;
+                    manifest.Add(manifestEntry);
+
+                    var created = target.CreateEntry(entryName, CompressionLevel.Optimal);
+                    await using var destination = created.Open();
+                    await destination.WriteAsync(stored, cancellationToken);
+                }
+
                 var mediaEntry = target.CreateEntry(MediaEntryName, CompressionLevel.Optimal);
                 await using var mediaStream = mediaEntry.Open();
 
                 if (_mediaCompressed && _mediaProtobufEntries is not null)
                 {
-                    var entries = new List<MediaManifestEntry>(_mediaProtobufEntries);
-                    entries.AddRange(pendingMedia.Select(item => item.Manifest));
-                    var protobuf = SerializeMediaProtobuf(entries);
+                    var protobuf = SerializeMediaProtobuf(manifest);
                     var compressed = CompressZstd(protobuf);
                     await mediaStream.WriteAsync(compressed, cancellationToken);
                 }
@@ -441,7 +645,8 @@ public sealed class DeckWorkspace : IDisposable
     }
 
     private bool MediaNameExists(string fileName) =>
-        _mediaEntries.Values.Any(name => string.Equals(name, fileName, StringComparison.OrdinalIgnoreCase))
+        (!_removedMediaNames.Contains(fileName)
+            && _mediaEntries.Values.Any(name => string.Equals(name, fileName, StringComparison.OrdinalIgnoreCase)))
         || _pendingMedia.Any(media => string.Equals(media.FileName, fileName, StringComparison.OrdinalIgnoreCase));
 
     private static string BuildBaseName(string front)
@@ -758,11 +963,6 @@ public sealed class DeckWorkspace : IDisposable
     private readonly record struct MediaManifestEntry(string Name, uint Size, byte[] Sha1);
 
     private readonly record struct PendingMedia(string FileName, byte[] Content);
-
-    private readonly record struct PendingMediaEntry(
-        string EntryName,
-        PendingMedia Media,
-        MediaManifestEntry Manifest);
 
     private static List<AnkiField> CleanFields(AnkiNote note) =>
         note.Fields

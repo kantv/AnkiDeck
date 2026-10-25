@@ -5,6 +5,7 @@
 @inject DeckWorkspaceStore Store
 @inject ZvukogramClient Zvukogram
 @inject IHttpContextAccessor HttpContextAccessor
+@inject IServiceScopeFactory ScopeFactory
 
 <PageTitle>Anki</PageTitle>
 
@@ -52,8 +53,43 @@
     </div>
 }
 
+@if (statusMessage is not null)
+{
+    <div class="alert alert-success" role="status">@statusMessage</div>
+}
+
 @if (workspace is not null)
 {
+    <div class="audio-job-overlay" id="audio-job-modal" hidden>
+        <div class="audio-job-dialog" role="dialog" aria-modal="true" aria-labelledby="audio-job-title">
+            <h2 class="h5" id="audio-job-title">Обновление аудио</h2>
+            <div class="audio-job-status" id="audio-job-status" aria-live="polite">Подготовка…</div>
+            <div class="progress mt-2" id="audio-job-progress" role="progressbar"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="progress-bar" id="audio-job-bar" style="width: 0%"></div>
+            </div>
+            <dl class="row small mb-2 mt-3">
+                <dt class="col-5">Заметки</dt>
+                <dd class="col-7" id="audio-job-notes">0 / 0</dd>
+                <dt class="col-5">Аудиофайлы</dt>
+                <dd class="col-7" id="audio-job-files">0 / 0</dd>
+                <dt class="col-5">Текущий текст</dt>
+                <dd class="col-7 text-break" id="audio-job-current">—</dd>
+            </dl>
+            <div class="alert alert-danger py-2 d-none" id="audio-job-error" role="alert"></div>
+            <div class="d-flex flex-wrap gap-2 justify-content-end">
+                <button type="button" class="btn btn-outline-secondary" id="audio-job-pause">Пауза</button>
+                <button type="button" class="btn btn-outline-danger" id="audio-job-cancel">Отменить</button>
+                <button type="button" class="btn btn-primary d-none" id="audio-job-close">Закрыть</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (workspace is not null)
+{
+    var audioStats = workspace.GetAudioStatistics();
+
     <div class="alert alert-success" role="status">
         <div>
             Файл <strong>@workspace.FileName</strong> прочитан за
@@ -64,6 +100,10 @@
             карточек: <strong>@workspace.CardCount</strong>.
         </div>
         <div>
+            Аудиофайлов в колоде: <strong>@audioStats.Total</strong>,
+            не используется: <strong>@audioStats.Unused</strong>.
+        </div>
+        <div>
             Заметок с HTML-разметкой:
             <strong>@workspace.NotesWithHtmlCount</strong>.
             <form method="post" @formname="deck-bulk" class="d-inline-block ms-2">
@@ -71,6 +111,12 @@
                 <button class="btn btn-sm btn-warning" type="submit" name="BulkAction" value="process-all"
                         disabled="@(workspace.NotesWithHtmlCount == 0)">
                     Обработать ВСЕ
+                </button>
+                <button class="btn btn-sm btn-outline-danger ms-2" type="submit" name="BulkAction"
+                        value="refresh-all-audio"
+                        onclick="return confirm('Вы действительно хотите обновить аудио файлы во всех карточках?');"
+                        disabled="@(workspace.NoteCount == 0)">
+                    Обновить ВСЕ аудио
                 </button>
             </form>
         </div>
@@ -133,27 +179,32 @@
                         @for (var index = 0; index < VisibleNotes.Count; index++)
                         {
                             var note = VisibleNotes[index];
-                            var audioFileName = AudioReference.FirstFileName(note.GetField("Audio"));
+                            var audioFileNames = AudioReference.AllFileNames(note.GetField("Audio")).ToList();
                             <tr>
                                 <td class="text-muted">@(index + 1)</td>
                                 <td class="note-field">@note.GetField("Front")</td>
                                 <td class="note-field">@note.GetField("Back")</td>
                                 <td class="note-field audio-cell">
-                                    @if (audioFileName is not null)
+                                    @if (audioFileNames.Count > 0)
                                     {
-                                        <span class="audio-play">
-                                            <button type="button" class="btn btn-outline-success play-audio"
-                                                    onclick="document.getElementById('note-audio-@note.NoteId').play()"
-                                                    title="Прослушать" aria-label="Прослушать @audioFileName">
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"
-                                                     fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                                                    <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
-                                                </svg>
-                                            </button>
-                                            <audio id="note-audio-@note.NoteId" preload="none"
-                                                   src="/anki/media/@Uri.EscapeDataString(audioFileName)"></audio>
-                                            <span class="audio-name">@audioFileName</span>
-                                        </span>
+                                        @for (var audioIndex = 0; audioIndex < audioFileNames.Count; audioIndex++)
+                                        {
+                                            var audioFileName = audioFileNames[audioIndex];
+                                            var audioElementId = $"note-audio-{note.NoteId}-{audioIndex}";
+                                            <span class="audio-play">
+                                                <button type="button" class="btn btn-outline-success play-audio"
+                                                        onclick="document.getElementById('@audioElementId').play()"
+                                                        title="Прослушать" aria-label="Прослушать @audioFileName">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"
+                                                         fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                                        <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
+                                                    </svg>
+                                                </button>
+                                                <audio id="@audioElementId" preload="none"
+                                                       src="/anki/media/@Uri.EscapeDataString(audioFileName)"></audio>
+                                                <span class="audio-name">@audioFileName</span>
+                                            </span>
+                                        }
                                     }
                                     else
                                     {
@@ -215,29 +266,37 @@
 
                             @if (workspace.AudioPreviewNoteId == note.NoteId)
                             {
-                                var generated = workspace.GetGeneratedAudio(note.NoteId);
+                                var generatedFiles = workspace.GetGeneratedAudioFiles(note.NoteId);
                                 <tr class="preview-row audio-preview-row">
                                     <td class="text-muted" aria-label="Сгенерированное аудио">↳</td>
                                     <td class="note-field">@note.GetField("Front")</td>
                                     <td class="note-field">@note.GetField("Back")</td>
                                     <td class="note-field">
-                                        <button type="button" class="btn btn-sm btn-success d-inline-flex align-items-center gap-1"
-                                                onclick="document.getElementById('preview-audio-@note.NoteId').play()"
-                                                aria-label="Прослушать сгенерированное аудио">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
-                                                 fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
-                                                <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
-                                            </svg>
-                                            <span>Прослушать</span>
-                                        </button>
-                                        <audio id="preview-audio-@note.NoteId" preload="none"
-                                               src="/anki/audio/@note.NoteId"></audio>
-                                        @if (generated is not null)
+                                        @for (var audioIndex = 0; audioIndex < generatedFiles.Count; audioIndex++)
                                         {
-                                            <div class="small text-muted mt-1">
-                                                @generated.Format · @generated.Duration.ToString("0.0") с
-                                            </div>
+                                            var generated = generatedFiles[audioIndex];
+                                            var previewAudioId = $"preview-audio-{note.NoteId}-{audioIndex}";
+                                            <span class="audio-play">
+                                                <button type="button" class="btn btn-sm btn-success play-audio"
+                                                        onclick="document.getElementById('@previewAudioId').play()"
+                                                        title="Прослушать @generated.Text"
+                                                        aria-label="Прослушать @generated.Text">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+                                                         fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                                        <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
+                                                    </svg>
+                                                </button>
+                                                <audio id="@previewAudioId" preload="none"
+                                                       src="/anki/audio/@note.NoteId/@audioIndex"></audio>
+                                                <span class="audio-name">@generated.Text</span>
+                                                <span class="small text-muted">
+                                                    @generated.Audio.Format · @generated.Audio.Duration.ToString("0.0") с
+                                                </span>
+                                            </span>
                                         }
+                                        <div class="small text-muted mt-1">
+                                            Сгенерировано файлов: @generatedFiles.Count
+                                        </div>
                                     </td>
                                     <td class="text-center">
                                         <span class="preview-hint">Аудио готово</span>
@@ -277,6 +336,7 @@
 
     private DeckWorkspace? workspace;
     private string? error;
+    private string? statusMessage;
     private bool settingsConfigured;
 
     [SupplyParameterFromForm(FormName = "anki-upload")]
@@ -375,6 +435,10 @@
                     if (string.Equals(BulkAction, "process-all", StringComparison.Ordinal))
                     {
                         await stored.CleanAllAsync();
+                    }
+                    else if (string.Equals(BulkAction, "refresh-all-audio", StringComparison.Ordinal))
+                    {
+                        await RefreshAllAudioAsync(stored, SettingsCookie.Read(context));
                     }
                 }
                 else if (!string.IsNullOrEmpty(Action))
@@ -498,21 +562,34 @@
         var settings = SettingsCookie.Read(context);
         if (!settings.IsComplete)
         {
-            error = "Заполните настройки Звукограм: e-mail, API-токен и голос.";
+            error = "Заполните настройки Звукограм: e-mail, API-токен и мужской голос.";
             return;
         }
 
-        var text = HtmlMarkup.ToSpeechText(note.GetField("Front"));
-        if (text.Length == 0)
+        var segments = HtmlMarkup.SplitForSpeech(note.GetField("Front"));
+        if (segments.Count == 0)
         {
             error = "Поле Front не содержит текста для озвучки.";
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(settings.FemaleVoice)
+            && segments.Any(VoiceSelector.PrefersFemaleVoice))
+        {
+            error = "Текст начинается с «la », но женский голос не задан. Укажите его в настройках.";
+            return;
+        }
+
         try
         {
-            var audio = await Zvukogram.SynthesizeAsync(text, settings, context.RequestAborted);
-            current.SetGeneratedAudio(note.NoteId, audio);
+            var files = new List<GeneratedAudioFile>(segments.Count);
+            foreach (var segment in segments)
+            {
+                var audio = await Zvukogram.SynthesizeAsync(segment, settings, context.RequestAborted);
+                files.Add(new GeneratedAudioFile(segment, audio));
+            }
+
+            current.SetGeneratedAudio(note.NoteId, files);
         }
         catch (ZvukogramException exception)
         {
@@ -523,4 +600,97 @@
             error = $"Не удалось сгенерировать аудио: {exception.Message}";
         }
     }
+
+    /// <summary>Starts the background "refresh all audio" job and returns immediately.</summary>
+    private Task RefreshAllAudioAsync(DeckWorkspace current, ZvukogramSettings settings)
+    {
+        if (!settings.IsComplete)
+        {
+            error = "Заполните настройки Звукограм: e-mail, API-токен и мужской голос.";
+            return Task.CompletedTask;
+        }
+
+        if (current.AudioJob is { } running && running.Snapshot().Active)
+        {
+            error = "Обновление аудио уже выполняется.";
+            return Task.CompletedTask;
+        }
+
+        var plans = current.Notes
+            .Select(note => new AudioPlan(note, HtmlMarkup.SplitForSpeech(note.GetField("Front"))))
+            .Where(plan => plan.Segments.Count > 0)
+            .ToList();
+
+        if (plans.Count == 0)
+        {
+            error = "В колоде нет заметок с текстом для озвучивания.";
+            return Task.CompletedTask;
+        }
+
+        // Fail before spending a single API request when some segment needs the female voice.
+        if (string.IsNullOrWhiteSpace(settings.FemaleVoice)
+            && plans.Any(plan => plan.Segments.Any(VoiceSelector.PrefersFemaleVoice)))
+        {
+            error = "Для части заметок текст начинается с «la », но женский голос не задан. Укажите его в настройках.";
+            return Task.CompletedTask;
+        }
+
+        var job = new BulkAudioJob(plans.Count, plans.Sum(plan => plan.Segments.Count));
+        current.AudioJob = job;
+
+        var scopeFactory = ScopeFactory;
+        _ = Task.Run(() => RunBulkAudioJobAsync(current, plans, settings, job, scopeFactory));
+
+        statusMessage = "Обновление аудио запущено.";
+        return Task.CompletedTask;
+    }
+
+    private static async Task RunBulkAudioJobAsync(
+        DeckWorkspace workspace,
+        IReadOnlyList<AudioPlan> plans,
+        ZvukogramSettings settings,
+        BulkAudioJob job,
+        IServiceScopeFactory scopeFactory)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var client = scope.ServiceProvider.GetRequiredService<ZvukogramClient>();
+
+            foreach (var plan in plans)
+            {
+                var files = new List<GeneratedAudioFile>(plan.Segments.Count);
+                foreach (var segment in plan.Segments)
+                {
+                    await job.WaitIfPausedAsync();
+                    job.SetCurrentText(segment);
+
+                    var audio = await client.SynthesizeAsync(segment, settings, job.Token);
+                    files.Add(new GeneratedAudioFile(segment, audio));
+                    job.SegmentCompleted();
+                }
+
+                await workspace.AttachAudioAsync(plan.Note, files, job.Token);
+                job.NoteCompleted();
+            }
+
+            workspace.ExpandedNoteId = null;
+            workspace.AudioPreviewNoteId = null;
+            job.Complete();
+        }
+        catch (OperationCanceledException)
+        {
+            job.MarkCancelled();
+        }
+        catch (Exception) when (job.Token.IsCancellationRequested)
+        {
+            job.MarkCancelled();
+        }
+        catch (Exception exception)
+        {
+            job.Fail(exception.Message);
+        }
+    }
+
+    private sealed record AudioPlan(AnkiNote Note, IReadOnlyList<string> Segments);
 }
