@@ -89,6 +89,7 @@
 @if (workspace is not null)
 {
     var audioStats = workspace.GetAudioStatistics();
+    var mediaSizes = workspace.GetMediaSizes();
 
     <div class="alert alert-success" role="status">
         <div>
@@ -164,6 +165,7 @@
                                     <span>Audio</span>
                                 </label>
                             </th>
+                            <th scope="col" class="text-center">Генерация</th>
                             <th scope="col" class="text-center">
                                 <label class="column-filter" title="Показывать только заметки с HTML-разметкой">
                                     <input class="form-check-input" type="checkbox" name="HtmlOnly" value="true"
@@ -203,17 +205,23 @@
                                                 <audio id="@audioElementId" preload="none"
                                                        src="/anki/media/@Uri.EscapeDataString(audioFileName)"></audio>
                                                 <span class="audio-name">@audioFileName</span>
+                                                @if (mediaSizes.TryGetValue(audioFileName, out var audioSize))
+                                                {
+                                                    <span class="audio-size">(@FormatFileSize(audioSize))</span>
+                                                }
                                             </span>
                                         }
                                     }
                                     else
                                     {
                                         @note.GetField("Audio")
-                                        <button class="btn btn-outline-primary generate-audio" type="submit"
-                                                name="Action" value="generate:@note.NoteId">
-                                            Сгенерировать
-                                        </button>
                                     }
+                                </td>
+                                <td class="text-center">
+                                    <button class="btn btn-sm btn-outline-primary generate-audio" type="submit"
+                                            name="Action" value="generate:@note.NoteId">
+                                        Сгенерировать
+                                    </button>
                                 </td>
                                 <td class="text-center">
                                     @if (note.HasHtmlMarkup)
@@ -253,6 +261,9 @@
                                     <td class="note-field">@preview.Front</td>
                                     <td class="note-field">@preview.Back</td>
                                     <td class="note-field">@preview.Audio</td>
+                                    <td class="text-center">
+                                        <span class="text-muted">—</span>
+                                    </td>
                                     <td class="text-center">
                                         <span class="preview-hint">Без разметки</span>
                                     </td>
@@ -300,6 +311,9 @@
                                     </td>
                                     <td class="text-center">
                                         <span class="preview-hint">Аудио готово</span>
+                                    </td>
+                                    <td class="text-center">
+                                        <span class="text-muted">—</span>
                                     </td>
                                     <td class="text-center">
                                         <button class="btn btn-sm btn-success" type="submit"
@@ -690,6 +704,19 @@
         {
             job.Fail(exception.Message);
         }
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        var culture = System.Globalization.CultureInfo.GetCultureInfo("ru-RU");
+        if (bytes < 1024)
+        {
+            return $"{bytes} Б";
+        }
+
+        return bytes < 1024 * 1024
+            ? $"{(bytes / 1024.0).ToString("0.#", culture)} КБ"
+            : $"{(bytes / (1024.0 * 1024.0)).ToString("0.#", culture)} МБ";
     }
 
     private sealed record AudioPlan(AnkiNote Note, IReadOnlyList<string> Segments);

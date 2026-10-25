@@ -105,6 +105,13 @@
     overflow-wrap: anywhere;
 }
 
+.audio-size[b-48k1pm9ytx] {
+    flex: 0 0 auto;
+    color: var(--bs-secondary-color);
+    font-size: 0.8em;
+    white-space: nowrap;
+}
+
 .audio-cell audio[b-48k1pm9ytx] {
     display: none;
 }

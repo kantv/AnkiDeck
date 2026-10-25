@@ -185,6 +185,55 @@ public sealed class DeckWorkspace : IDisposable
     private static bool IsAudioFile(string fileName) =>
         GetContentType(fileName).StartsWith("audio/", StringComparison.Ordinal);
 
+    /// <summary>Returns the size in bytes of every media file known to the workspace.</summary>
+    public IReadOnlyDictionary<string, long> GetMediaSizes()
+    {
+        var sizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var media in _pendingMedia)
+        {
+            sizes[media.FileName] = media.Content.Length;
+        }
+
+        var missing = new List<(string EntryId, string FileName)>();
+        foreach (var pair in _mediaEntries)
+        {
+            if (_removedMediaNames.Contains(pair.Value)
+                || sizes.ContainsKey(pair.Value)
+                || string.IsNullOrEmpty(pair.Value))
+            {
+                continue;
+            }
+
+            if (_mediaProtobufEntries is not null
+                && int.TryParse(pair.Key, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index)
+                && index >= 0
+                && index < _mediaProtobufEntries.Count)
+            {
+                sizes[pair.Value] = _mediaProtobufEntries[index].Size;
+            }
+            else
+            {
+                missing.Add((pair.Key, pair.Value));
+            }
+        }
+
+        if (missing.Count > 0)
+        {
+            using var archive = ZipFile.OpenRead(_packagePath);
+            foreach (var (entryId, fileName) in missing)
+            {
+                var entry = archive.GetEntry(entryId);
+                if (entry is not null)
+                {
+                    sizes[fileName] = entry.Length;
+                }
+            }
+        }
+
+        return sizes;
+    }
+
     /// <summary>
     /// Counts audio files registered in the deck (including generated but unexported ones) and
     /// how many of them are not referenced by any [sound:...] in any note field.
